@@ -35,7 +35,7 @@ const SYNC_AVAILABLE = !!FIREBASE_CONFIG.apiKey;
    works for everyone, with NOTHING for them to set up. Until it's filled,
    the AI features show a gentle "coming soon". The proxy keeps the key
    off every phone; nothing secret lives in this file. */
-const GATA_AI_PROXY = "";
+const GATA_AI_PROXY = "https://gata-ai-proxy.vybrance.workers.dev";
 const AI_AVAILABLE = /^https?:\/\//.test(GATA_AI_PROXY);
 
 /* ---- 2) Content + constants ---- */

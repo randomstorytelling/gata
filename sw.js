@@ -1,6 +1,6 @@
 /* Gata service worker — app-shell cache for offline + fast loads.
    Bump CACHE when you change app files so clients pick up the update. */
-const CACHE = 'gata-v5';
+const CACHE = 'gata-v6';
 const ASSETS = ['./', './index.html', './app.css', './content.js', './features.js', './app.js', './manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
