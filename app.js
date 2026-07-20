@@ -91,7 +91,7 @@ function medByKey(k){ return C.meditations.find(m=>m.key===k) || C.meditations.f
 function freshState(){
   return {
     v:3,
-    profile:{ name:"", theme:"auto", onboarded:false, guest:false, cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8", ouraToken:"", ouraAuto:false, ouraLastSync:0 },
+    profile:{ name:"", theme:"auto", onboarded:false, guest:false, uid:"", cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8", ouraToken:"", ouraAuto:false, ouraLastSync:0 },
     cycles:{ starts:[] },
     logs:{},
     practice:{ sessions:[] },
@@ -132,6 +132,7 @@ function normalizeState(p){
   st.profile.ouraAuto=!!st.profile.ouraAuto;
   if(typeof st.profile.ouraLastSync!=="number") st.profile.ouraLastSync=0;
   st.profile.guest=!!st.profile.guest;
+  if(typeof st.profile.uid!=="string") st.profile.uid="";
   st.profile.cycleLength=clampCycle(st.profile.cycleLength);
   st.profile.periodLength=Math.max(2,Math.min(10,+st.profile.periodLength||5));
   st.profile.soundVol=(typeof st.profile.soundVol==="number"&&st.profile.soundVol>=0&&st.profile.soundVol<=1)?st.profile.soundVol:0.6;
@@ -220,28 +221,36 @@ function mergeState(remote, local){
 
 /* ---- 5) Sync (Firebase adapter — optional) ---- */
 const Sync = {
-  user:null, db:null, docRef:null, snapUnsub:null, applyingRemote:false, pushTimer:null, authResolved:false,
+  user:null, db:null, docRef:null, snapUnsub:null, applyingRemote:false, pushTimer:null, authResolved:false, redirectError:null,
+  ready(){ return SYNC_AVAILABLE && typeof firebase!=="undefined" && firebase.auth; }, // SDK actually loaded
   init(){
     if(!SYNC_AVAILABLE) return;
     try{
       firebase.initializeApp(FIREBASE_CONFIG);
       this.db = firebase.firestore();
       try { this.db.enablePersistence({synchronizeTabs:true}); } catch(e){}
+      // keep her signed in across restarts so she doesn't have to log back in each visit
+      try { firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch(e){}
       firebase.auth().onAuthStateChanged(u=>this.onAuth(u));
-      firebase.auth().getRedirectResult().catch(()=>{});
+      firebase.auth().getRedirectResult().catch(e=>{ this.redirectError=e; if(this.authResolved) render(); }); // surface Google-redirect failures on the login page
     }catch(e){ console.warn("Firebase init failed", e); this.authResolved=true; }
   },
   signIn(){
-    if(!SYNC_AVAILABLE){ toast("Sync isn't set up yet"); return; }
+    if(!this.ready()){ toast("Accounts aren't available right now — please reload."); return; }
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt:"select_account" });
-    if(isMobile){ firebase.auth().signInWithRedirect(provider); }
-    else { firebase.auth().signInWithPopup(provider).catch(()=>firebase.auth().signInWithRedirect(provider)); }
+    if(isMobile){ firebase.auth().signInWithRedirect(provider); return; }
+    firebase.auth().signInWithPopup(provider).catch(e=>{
+      const c=(e&&e.code)||"";
+      if(c==="auth/popup-closed-by-user"||c==="auth/cancelled-popup-request"||c==="auth/user-cancelled") return; // she closed it on purpose
+      if(c==="auth/popup-blocked"||c==="auth/operation-not-supported-in-this-environment"){ firebase.auth().signInWithRedirect(provider); return; }
+      this.redirectError=e; if(this.authResolved) render();
+    });
   },
   // email + password (Firebase Auth → enable Email/Password in the console). Return promises so the login page can show state.
-  emailSignIn(email, pw){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().signInWithEmailAndPassword(email, pw); },
-  emailSignUp(email, pw){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().createUserWithEmailAndPassword(email, pw); },
-  resetPassword(email){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().sendPasswordResetEmail(email); },
+  emailSignIn(email, pw){ if(!this.ready()) return Promise.reject(new Error("Accounts aren't available right now — please reload.")); return firebase.auth().signInWithEmailAndPassword(email, pw); },
+  emailSignUp(email, pw){ if(!this.ready()) return Promise.reject(new Error("Accounts aren't available right now — please reload.")); return firebase.auth().createUserWithEmailAndPassword(email, pw); },
+  resetPassword(email){ if(!this.ready()) return Promise.reject(new Error("Accounts aren't available right now — please reload.")); return firebase.auth().sendPasswordResetEmail(email); },
   authErrorMessage(e){
     const c=(e&&e.code)||""; const map={
       "auth/invalid-email":"That email doesn't look right.",
@@ -256,18 +265,34 @@ const Sync = {
       "auth/operation-not-allowed":"Email sign-in isn't enabled yet — try Google for now." };
     return map[c] || (e&&e.message) || "Something went wrong — please try again.";
   },
-  signOut(){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} S.profile.guest=false; loginMode="signin"; commit(); try{ firebase.auth().signOut(); }catch(e){} },
+  signOut(){
+    if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;}
+    loginMode="signin";
+    try{ if(this.user && this.docRef) this.docRef.set(S, {merge:false}).catch(()=>{}); }catch(e){} // flush her latest to her own doc
+    // clear this device so the next account starts clean — her data is safe in her cloud doc
+    S = freshState(); persistLocal();
+    try{ if(this.ready()) firebase.auth().signOut(); }catch(e){}
+  },
   async onAuth(u){
     this.user = u || null;
     this.authResolved = true;
     updateSyncUI();
-    if(!u){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} render(); return; }
+    // re-render unless the login form is already on screen (avoid blanking a form she's mid-typing when auth resolves late)
+    if(!u){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} if(!$("loginEmail")) render(); return; }
+    render(); // leave the splash immediately from local state; the sync below refreshes when it lands (never strand on a hung read)
     this.docRef = this.db.collection("gataUsers").doc(u.uid);
     try{
       const snap = await this.docRef.get();
       const remote = snap.exists ? snap.data() : null;
       this.applyingRemote = true;
-      S = mergeState(remote, S);
+      const localUid = S.profile && S.profile.uid;
+      if(localUid && localUid !== u.uid){
+        S = remote ? normalizeState(remote) : freshState();   // a different account than this device's cache → adopt it, don't merge the other person's data in
+      } else {
+        S = mergeState(remote, S);                            // same account, or a guest signing in → carry local data into the account
+      }
+      S.profile.uid = u.uid;      // bind this device's state to the signed-in account
+      S.profile.guest = false;    // a signed-in user is never a guest (and never uploads guest=true)
       persistLocal();
       this.applyingRemote = false;
       await this.docRef.set(S, {merge:false});
@@ -292,7 +317,10 @@ const Sync = {
     if(!this.user || !this.docRef) return;
     clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(()=>{ this.docRef.set(S, {merge:false}).catch(()=>{}); }, 1200);
-  }
+  },
+  // push right now (used when finishing intake, so it's saved to her account immediately
+  // and a later login never repeats onboarding — no waiting on the debounce)
+  pushNow(){ if(!this.user || !this.docRef) return; clearTimeout(this.pushTimer); this.docRef.set(S, {merge:false}).catch(()=>{}); }
 };
 function updateSyncUI(){ const d=$("syncDot"); if(d) d.classList.toggle("on", !!Sync.user); }
 
@@ -664,6 +692,7 @@ function render(){
   ({today:renderToday, phases:renderPhases, calm:renderCalm, cycle:renderCycle, more:renderMore}[currentTab]||renderToday)();
   renderTabbar();
   $("brandMark").style.background="var(--accent)";
+  maybeOpenMomentFromHash(); // opens the moment sheet once she's in the app if launched via a #checkin ping (idempotent — clears the hash)
 }
 function switchTab(t){ currentTab=t; window.scrollTo(0,0); render(); }
 
@@ -2155,12 +2184,13 @@ const Moment = {
 window.Moment=Moment;
 // opened from a check-in ping (calendar event URL / deep link #checkin) → offer the moment sheet
 function maybeOpenMomentFromHash(){
-  if(/[#&](checkin|moment)\b/i.test(location.hash||"")){
-    try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){}
-    if(S.profile.onboarded){ setTimeout(()=>{ try{ Moment.open(); }catch(e){} }, 300); }
-    return true;
-  }
-  return false;
+  if(!/[#&](checkin|moment)\b/i.test(location.hash||"")) return false;
+  // only when she's genuinely inside the app — never over the splash, login, or onboarding
+  const inApp = S.profile.onboarded && !needsLogin() && (!SYNC_AVAILABLE || Sync.authResolved);
+  if(!inApp) return false;   // leave the hash; a later render (once she's in) will pick it up
+  try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){}
+  setTimeout(()=>{ try{ Moment.open(); }catch(e){} }, 300);
+  return true;
 }
 
 /* ============================================================
@@ -2176,8 +2206,10 @@ function renderSplash(){
   main.innerHTML=`<div class="view login-wrap">${loginBrandHTML()}<div class="login-splash-dot"></div></div>`;
 }
 let loginMode="signin"; // "signin" | "signup"
+function resetOnboarding(){ obStep=0; ob.name=""; ob.last=todayISO(); ob.cycle=28; ob.period=5; ob.goals=[]; } // so a fresh intake (e.g. a different account) always starts at step 1
 function renderLogin(){
   $("tabbar").innerHTML=""; $("calmQuick").classList.add("hidden"); setAccent(0);
+  resetOnboarding(); // login is the choke point before any fresh onboarding — never resume a prior user's intake
   const isSignup = loginMode==="signup";
   const authBody = `
     <div class="login-card">
@@ -2211,6 +2243,7 @@ function renderLogin(){
 
   const errEl=$("loginErr");
   const showErr=(m)=>{ errEl.textContent=m; errEl.style.display="block"; };
+  if(Sync.redirectError){ showErr(Sync.authErrorMessage(Sync.redirectError)); Sync.redirectError=null; } // a failed Google redirect lands back here
   const submit=$("loginSubmit");
   submit.onclick=async()=>{
     const email=($("loginEmail").value||"").trim(); const pw=$("loginPw").value||"";
@@ -2222,7 +2255,7 @@ function renderLogin(){
     catch(e){ submit.disabled=false; submit.textContent=old; showErr(Sync.authErrorMessage(e)); }
   };
   ["loginEmail","loginPw"].forEach(id=>{ const el=$(id); if(el) el.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); submit.click(); } }; });
-  const gg=$("loginGoogle"); if(gg) gg.onclick=()=>{ errEl.style.display="none"; try{ Sync.signIn(); }catch(e){ showErr(Sync.authErrorMessage(e)); } };
+  const gg=$("loginGoogle"); if(gg) gg.onclick=()=>{ if(gg.disabled) return; gg.disabled=true; errEl.style.display="none"; try{ Sync.signIn(); }catch(e){ gg.disabled=false; showErr(Sync.authErrorMessage(e)); } setTimeout(()=>{ gg.disabled=false; },4000); };
   const tog=$("loginToggle"); if(tog) tog.onclick=()=>{ loginMode=isSignup?"signin":"signup"; renderLogin(); };
   const fp=$("loginForgot"); if(fp) fp.onclick=async()=>{
     const email=($("loginEmail").value||"").trim();
@@ -2244,7 +2277,8 @@ function renderOnboarding(){
   let body="";
   if(obStep===0){
     body=`<div class="hero-emoji">🌙</div><h2 class="center" style="margin-top:10px">Welcome to Gata</h2>
-      <p class="center muted" style="margin:8px 0 22px">A gentle daily companion for your cycle and your nervous system — what to eat, how to move, which herbs and teas, world-class breathwork and meditation, and how to come back to calm, all matched to where you are this month.</p>
+      <p class="center muted" style="margin:8px 0 ${(SYNC_AVAILABLE&&Sync.user)?"12px":"22px"}">A gentle daily companion for your cycle and your nervous system — what to eat, how to move, which herbs and teas, world-class breathwork and meditation, and how to come back to calm, all matched to where you are this month.</p>
+      ${(SYNC_AVAILABLE&&Sync.user)?`<div class="center muted" style="font-size:12px;margin:0 0 20px">Signed in${Sync.user.email?` as <b>${esc(Sync.user.email)}</b>`:""} — this quick setup saves to your account, so you'll only do it once.</div>`:""}
       <button class="btn" id="obNext">Let's begin</button>`;
   } else if(obStep===1){
     body=`<h2>What should I call you?</h2><p class="muted" style="margin:6px 0 16px">So your check-ins feel like yours.</p>
@@ -2290,7 +2324,8 @@ function renderOnboarding(){
   const dn=$("obDone"); if(dn) dn.onclick=()=>{
     S.profile.name=ob.name; S.profile.cycleLength=ob.cycle; S.profile.periodLength=ob.period; S.profile.goals=ob.goals; S.profile.onboarded=true;
     Cycle.logStart(ob.last);
-    commit(); $("calmQuick").classList.remove("hidden"); currentTab="today"; render();
+    commit(); if(SYNC_AVAILABLE && Sync.user) Sync.pushNow();   // save intake to her account now, so logging in again never repeats it
+    $("calmQuick").classList.remove("hidden"); currentTab="today"; render();
   };
 }
 
@@ -2311,8 +2346,7 @@ updateSyncUI();
 if(SYNC_AVAILABLE){ setTimeout(()=>{ if(!Sync.authResolved){ Sync.authResolved=true; render(); } }, 3500); }
 Reminders.scheduleAll();
 Health.importFromHash();   // ingest Apple Health payload if launched via the Shortcut deep link
-render();
-maybeOpenMomentFromHash();  // launched from a check-in ping (#checkin) → open the moment sheet
+render();  // render() itself handles a #checkin deep-link once she's in the app
 // quietly refresh from Oura on open, if connected + auto-sync on
 if(Oura.connected() && S.profile.ouraAuto){ Oura.sync(2,{quiet:true}).then(n=>{ if(n && S.profile.onboarded) render(); }).catch(()=>{}); }
 window.addEventListener("hashchange", ()=>{ Health.importFromHash(); maybeOpenMomentFromHash(); }); // app already open → re-sync / check-in
