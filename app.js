@@ -91,7 +91,7 @@ function medByKey(k){ return C.meditations.find(m=>m.key===k) || C.meditations.f
 function freshState(){
   return {
     v:3,
-    profile:{ name:"", theme:"auto", onboarded:false, cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8", ouraToken:"", ouraAuto:false, ouraLastSync:0 },
+    profile:{ name:"", theme:"auto", onboarded:false, guest:false, cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8", ouraToken:"", ouraAuto:false, ouraLastSync:0 },
     cycles:{ starts:[] },
     logs:{},
     practice:{ sessions:[] },
@@ -131,6 +131,7 @@ function normalizeState(p){
   if(typeof st.profile.ouraToken!=="string") st.profile.ouraToken="";
   st.profile.ouraAuto=!!st.profile.ouraAuto;
   if(typeof st.profile.ouraLastSync!=="number") st.profile.ouraLastSync=0;
+  st.profile.guest=!!st.profile.guest;
   st.profile.cycleLength=clampCycle(st.profile.cycleLength);
   st.profile.periodLength=Math.max(2,Math.min(10,+st.profile.periodLength||5));
   st.profile.soundVol=(typeof st.profile.soundVol==="number"&&st.profile.soundVol>=0&&st.profile.soundVol<=1)?st.profile.soundVol:0.6;
@@ -219,7 +220,7 @@ function mergeState(remote, local){
 
 /* ---- 5) Sync (Firebase adapter — optional) ---- */
 const Sync = {
-  user:null, db:null, docRef:null, snapUnsub:null, applyingRemote:false, pushTimer:null,
+  user:null, db:null, docRef:null, snapUnsub:null, applyingRemote:false, pushTimer:null, authResolved:false,
   init(){
     if(!SYNC_AVAILABLE) return;
     try{
@@ -228,7 +229,7 @@ const Sync = {
       try { this.db.enablePersistence({synchronizeTabs:true}); } catch(e){}
       firebase.auth().onAuthStateChanged(u=>this.onAuth(u));
       firebase.auth().getRedirectResult().catch(()=>{});
-    }catch(e){ console.warn("Firebase init failed", e); }
+    }catch(e){ console.warn("Firebase init failed", e); this.authResolved=true; }
   },
   signIn(){
     if(!SYNC_AVAILABLE){ toast("Sync isn't set up yet"); return; }
@@ -237,9 +238,28 @@ const Sync = {
     if(isMobile){ firebase.auth().signInWithRedirect(provider); }
     else { firebase.auth().signInWithPopup(provider).catch(()=>firebase.auth().signInWithRedirect(provider)); }
   },
-  signOut(){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} firebase.auth().signOut(); },
+  // email + password (Firebase Auth → enable Email/Password in the console). Return promises so the login page can show state.
+  emailSignIn(email, pw){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().signInWithEmailAndPassword(email, pw); },
+  emailSignUp(email, pw){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().createUserWithEmailAndPassword(email, pw); },
+  resetPassword(email){ if(!SYNC_AVAILABLE) return Promise.reject(new Error("Accounts aren't set up on this build.")); return firebase.auth().sendPasswordResetEmail(email); },
+  authErrorMessage(e){
+    const c=(e&&e.code)||""; const map={
+      "auth/invalid-email":"That email doesn't look right.",
+      "auth/user-disabled":"This account has been disabled.",
+      "auth/user-not-found":"No account with that email — try creating one.",
+      "auth/wrong-password":"That password doesn't match. Try again, or reset it.",
+      "auth/invalid-credential":"Email or password didn't match. Try again, or reset it.",
+      "auth/email-already-in-use":"That email already has an account — try signing in.",
+      "auth/weak-password":"Please choose a password of at least 6 characters.",
+      "auth/too-many-requests":"Too many tries — please wait a moment and retry.",
+      "auth/network-request-failed":"Couldn't reach the network — check your connection.",
+      "auth/operation-not-allowed":"Email sign-in isn't enabled yet — try Google for now." };
+    return map[c] || (e&&e.message) || "Something went wrong — please try again.";
+  },
+  signOut(){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} S.profile.guest=false; loginMode="signin"; commit(); try{ firebase.auth().signOut(); }catch(e){} },
   async onAuth(u){
     this.user = u || null;
+    this.authResolved = true;
     updateSyncUI();
     if(!u){ if(this.snapUnsub){this.snapUnsub();this.snapUnsub=null;} render(); return; }
     this.docRef = this.db.collection("gataUsers").doc(u.uid);
@@ -635,7 +655,10 @@ const main = $("main");
 let currentTab="today", activePhaseTab=0, calmTab="breathe";
 let calMonth=(()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth()}; })();
 
+function needsLogin(){ return !Sync.user && !S.profile.guest; }
 function render(){
+  if(SYNC_AVAILABLE && !Sync.authResolved){ renderSplash(); return; }   // waiting to learn if she's already signed in
+  if(needsLogin()){ renderLogin(); return; }                            // login page: sign in, create account, or continue as guest
   if(!S.profile.onboarded){ renderOnboarding(); return; }
   $("calmQuick").classList.remove("hidden");
   ({today:renderToday, phases:renderPhases, calm:renderCalm, cycle:renderCycle, more:renderMore}[currentTab]||renderToday)();
@@ -1066,8 +1089,8 @@ function renderMore(){
         </div>
       </div>
       <button class="btn ghost" id="signOut" style="margin-top:6px">Sign out</button>` : `
-      <div class="sd" style="margin-bottom:10px">Sign in with Google so your check-ins, cycle, and practice sync across devices and are safely backed up.</div>
-      <button class="btn google" id="signIn"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.6 13.2l7.8 6.1C12.2 13.4 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7C43.9 38 46.5 31.8 46.5 24.5z"/><path fill="#FBBC05" d="M10.4 28.3c-.5-1.5-.8-3.1-.8-4.8s.3-3.3.8-4.8l-7.8-6.1C1 16.1 0 19.9 0 24s1 7.9 2.6 11.4l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.4-5.7c-2 1.4-4.7 2.3-7.8 2.3-6.4 0-11.8-3.9-13.6-9.4l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/></svg>Sign in with Google</button>`)
+      <div class="sd" style="margin-bottom:10px">Sign in or create an account so your check-ins, cycle, and practice sync across your devices and are safely backed up.</div>
+      <button class="btn" id="goLogin">Sign in or create an account</button>`)
     : `<div class="sd">Cloud sync isn't configured yet. Your data is saved privately on this device — use Export below to back it up.</div>`;
 
   const remRow=(key,label,desc)=>{
@@ -1190,7 +1213,7 @@ function renderMore(){
     </div>
   </div>`;
 
-  const si=$("signIn"); if(si) si.onclick=()=>Sync.signIn();
+  const gl=$("goLogin"); if(gl) gl.onclick=()=>{ S.profile.guest=false; commit(); loginMode="signin"; window.scrollTo(0,0); render(); };
   const so=$("signOut"); if(so) so.onclick=()=>{ Sync.signOut(); toast("Signed out"); };
   $("mSave").onclick=()=>{
     S.profile.name=$("mName").value.trim();
@@ -2131,12 +2154,82 @@ function maybeOpenMomentFromHash(){
 }
 
 /* ============================================================
+   LOGIN — the entry page. Sign in / create an account (email +
+   password or Google) so check-ins sync across devices, or continue
+   without an account (local-first). Shown before onboarding whenever
+   she isn't signed in and hasn't chosen guest.
+   ============================================================ */
+const GOOGLE_SVG = `<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.6 13.2l7.8 6.1C12.2 13.4 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7C43.9 38 46.5 31.8 46.5 24.5z"/><path fill="#FBBC05" d="M10.4 28.3c-.5-1.5-.8-3.1-.8-4.8s.3-3.3.8-4.8l-7.8-6.1C1 16.1 0 19.9 0 24s1 7.9 2.6 11.4l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.4-5.7c-2 1.4-4.7 2.3-7.8 2.3-6.4 0-11.8-3.9-13.6-9.4l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/></svg>`;
+function loginBrandHTML(){ return `<div class="login-brand"><div class="login-mark">G</div><div class="login-name">Gata</div><div class="login-tag">cycle &amp; calm</div></div>`; }
+function renderSplash(){
+  $("tabbar").innerHTML=""; $("calmQuick").classList.add("hidden"); setAccent(0);
+  main.innerHTML=`<div class="view login-wrap">${loginBrandHTML()}<div class="login-splash-dot"></div></div>`;
+}
+let loginMode="signin"; // "signin" | "signup"
+function renderLogin(){
+  $("tabbar").innerHTML=""; $("calmQuick").classList.add("hidden"); setAccent(0);
+  const isSignup = loginMode==="signup";
+  const authBody = `
+    <div class="login-card">
+      <div class="login-h">${isSignup?"Create your account":"Welcome back"}</div>
+      <div class="login-sub">${isSignup?"So your check-ins, cycle, and practice are saved and follow you across devices.":"Sign in to pick up right where you left off — on any device."}</div>
+      <div class="login-err" id="loginErr" style="display:none"></div>
+      <div class="field"><label>Email</label><input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" autocapitalize="off" spellcheck="false"></div>
+      <div class="field"><label>Password</label><input type="password" id="loginPw" placeholder="${isSignup?"At least 6 characters":"Your password"}" autocomplete="${isSignup?"new-password":"current-password"}"></div>
+      <button class="btn" id="loginSubmit">${isSignup?"Create account":"Sign in"}</button>
+      ${isSignup?"":`<button class="link-btn" id="loginForgot">Forgot password?</button>`}
+      <div class="login-or"><span>or</span></div>
+      <button class="btn google" id="loginGoogle">${GOOGLE_SVG}Continue with Google</button>
+      <div class="login-toggle">${isSignup?`Already have an account? <a class="link" id="loginToggle">Sign in</a>`:`New to Gata? <a class="link" id="loginToggle">Create an account</a>`}</div>
+    </div>
+    <button class="link-btn login-guest" id="loginGuest">Continue without an account →</button>`;
+  const localBody = `
+    <div class="login-card">
+      <div class="login-h">Welcome to Gata</div>
+      <div class="login-sub">Your practice lives privately on this device. (Cloud accounts aren't set up on this build — everything still works locally.)</div>
+      <button class="btn" id="loginGuest">Get started →</button>
+    </div>`;
+  main.innerHTML=`<div class="view login-wrap">
+    ${loginBrandHTML()}
+    ${SYNC_AVAILABLE?authBody:localBody}
+    <div class="login-legal">Gata is wellness education, not medical advice.</div>
+  </div>`;
+  setAccent(0);
+
+  const guest=$("loginGuest"); if(guest) guest.onclick=()=>{ S.profile.guest=true; commit(); render(); };
+  if(!SYNC_AVAILABLE) return;
+
+  const errEl=$("loginErr");
+  const showErr=(m)=>{ errEl.textContent=m; errEl.style.display="block"; };
+  const submit=$("loginSubmit");
+  submit.onclick=async()=>{
+    const email=($("loginEmail").value||"").trim(); const pw=$("loginPw").value||"";
+    errEl.style.display="none";
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showErr("Please enter a valid email address."); return; }
+    if(pw.length<6){ showErr("Password should be at least 6 characters."); return; }
+    submit.disabled=true; const old=submit.textContent; submit.textContent=isSignup?"Creating…":"Signing in…";
+    try{ await (isSignup?Sync.emailSignUp(email,pw):Sync.emailSignIn(email,pw)); /* onAuth → render() moves past login */ }
+    catch(e){ submit.disabled=false; submit.textContent=old; showErr(Sync.authErrorMessage(e)); }
+  };
+  ["loginEmail","loginPw"].forEach(id=>{ const el=$(id); if(el) el.onkeydown=e=>{ if(e.key==="Enter"){ e.preventDefault(); submit.click(); } }; });
+  const gg=$("loginGoogle"); if(gg) gg.onclick=()=>{ errEl.style.display="none"; try{ Sync.signIn(); }catch(e){ showErr(Sync.authErrorMessage(e)); } };
+  const tog=$("loginToggle"); if(tog) tog.onclick=()=>{ loginMode=isSignup?"signin":"signup"; renderLogin(); };
+  const fp=$("loginForgot"); if(fp) fp.onclick=async()=>{
+    const email=($("loginEmail").value||"").trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){ showErr("Enter your email above first, then tap reset."); return; }
+    try{ await Sync.resetPassword(email); errEl.style.display="none"; toast("Reset link sent to "+email); }
+    catch(e){ showErr(Sync.authErrorMessage(e)); }
+  };
+  setTimeout(()=>{ const em=$("loginEmail"); if(em) em.focus(); }, 80);
+}
+
+/* ============================================================
    ONBOARDING
    ============================================================ */
 let obStep=0; const ob={name:"",last:todayISO(),cycle:28,period:5,goals:[]};
 function renderOnboarding(){
   $("tabbar").innerHTML=""; $("calmQuick").classList.add("hidden");
-  const steps = SYNC_AVAILABLE ? 6 : 5; // welcome, name, cycle, goals, [signin], disclaimer
+  const steps = 5; // welcome, name, cycle, goals, disclaimer (login now happens before onboarding)
   const dots=Array.from({length:steps},(_,i)=>`<i class="${i<=obStep?"on":""}"></i>`).join("");
   let body="";
   if(obStep===0){
@@ -2159,11 +2252,6 @@ function renderOnboarding(){
       <div class="chips" id="obGoals">${(C.goals||[]).map(g=>`<div class="pill ${ob.goals.includes(g.key)?"sel":""}" data-goal="${g.key}">${esc(g.label)}</div>`).join("")}</div>
       <button class="btn" id="obNext" style="margin-top:18px">Next</button>
       <button class="btn ghost" id="obSkip" style="margin-top:10px">Skip</button>`;
-  } else if(obStep===4 && SYNC_AVAILABLE){
-    body=`<div class="hero-emoji">☁️</div><h2 class="center" style="margin-top:8px">Sync across your devices</h2>
-      <p class="center muted" style="margin:8px 0 20px">Sign in with Google and your check-ins, cycle, and practice are safely backed up and follow you everywhere. Totally optional.</p>
-      <button class="btn google" id="obSignIn"><svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.6 13.2l7.8 6.1C12.2 13.4 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.4 5.7C43.9 38 46.5 31.8 46.5 24.5z"/><path fill="#FBBC05" d="M10.4 28.3c-.5-1.5-.8-3.1-.8-4.8s.3-3.3.8-4.8l-7.8-6.1C1 16.1 0 19.9 0 24s1 7.9 2.6 11.4l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.4-5.7c-2 1.4-4.7 2.3-7.8 2.3-6.4 0-11.8-3.9-13.6-9.4l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/></svg>Sign in with Google</button>
-      <button class="btn ghost" id="obNext" style="margin-top:10px">Maybe later</button>`;
   } else {
     body=`<h2>One important note</h2><div class="disclaimer-box" style="margin:14px 0">${esc(C.safety.disclaimer)}</div>
       <button class="btn" id="obDone">I understand — open Gata</button>`;
@@ -2177,7 +2265,6 @@ function renderOnboarding(){
   };
   const sk=$("obSkip"); if(sk) sk.onclick=()=>{ obStep++; renderOnboarding(); };
   const og=$("obGoals"); if(og) og.onclick=e=>{const d=e.target.closest("[data-goal]"); if(!d)return; const k=d.dataset.goal, i=ob.goals.indexOf(k); i>=0?ob.goals.splice(i,1):ob.goals.push(k); renderOnboarding();};
-  const osi=$("obSignIn"); if(osi) osi.onclick=()=>Sync.signIn();
   const dn=$("obDone"); if(dn) dn.onclick=()=>{
     S.profile.name=ob.name; S.profile.cycleLength=ob.cycle; S.profile.periodLength=ob.period; S.profile.goals=ob.goals; S.profile.onboarded=true;
     Cycle.logStart(ob.last);
@@ -2198,6 +2285,8 @@ applyTheme();
 })();
 Sync.init();
 updateSyncUI();
+// don't hang on the splash if Firebase is slow or unreachable — fall back to the login page
+if(SYNC_AVAILABLE){ setTimeout(()=>{ if(!Sync.authResolved){ Sync.authResolved=true; render(); } }, 3500); }
 Reminders.scheduleAll();
 Health.importFromHash();   // ingest Apple Health payload if launched via the Shortcut deep link
 render();
