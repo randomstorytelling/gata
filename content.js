@@ -286,7 +286,8 @@ window.GATA = {
       "Name one moment today that felt steadying or kind to your nervous system.",
       "What drained you today, and what (if anything) restored you?",
       "If today's energy were a message about where you are in your cycle, what would it say?"
-    ]
+    ],
+    places:["Home","Work","School","Out & about","Travelling","In bed","Outside","With people","Alone","Somewhere new"]
   },
 
   ns:{

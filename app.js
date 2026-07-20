@@ -81,7 +81,8 @@ function freshState(){
     cycles:{ starts:[] },
     logs:{},
     practice:{ sessions:[] },
-    reminders:{ checkin:{on:false,time:"08:00"}, meditation:{on:false,time:"08:30"}, breath:{on:false,time:"15:00"} },
+    drops:{},
+    reminders:{ checkin:{on:false,time:"08:00"}, meditation:{on:false,time:"08:30"}, breath:{on:false,time:"15:00"}, moments:{on:false,times:["11:00","15:00","19:00"]} },
     meta:{ updatedAt:0 }
   };
 }
@@ -99,6 +100,16 @@ function normalizeState(p){
   st.practice=Object.assign({}, f.practice, (p.practice&&typeof p.practice==="object")?p.practice:{});
   st.meta=Object.assign({}, f.meta, (p.meta&&typeof p.meta==="object")?p.meta:{});
   st.reminders={}; for(const k of Object.keys(f.reminders)) st.reminders[k]=Object.assign({}, f.reminders[k], ((p.reminders||{})[k])||{});
+  // throughout-the-day check-in pings: sanitize on/times ("HH:MM" only, deduped + sorted)
+  { const m=st.reminders.moments||{}; const times=Array.isArray(m.times)?m.times.filter(t=>typeof t==="string"&&/^\d{2}:\d{2}$/.test(t)):[];
+    st.reminders.moments={ on:!!m.on, times: times.length?[...new Set(times)].sort():["11:00","15:00","19:00"] }; }
+  // drops: personalized daily-drop cache, keyed by ISO date (note/prompt strings)
+  { const dsrc=(st.drops&&typeof st.drops==="object"&&!Array.isArray(st.drops))?st.drops:{}; const dclean={};
+    for(const d of Object.keys(dsrc)){ const v=dsrc[d]; if(!ISO_RE.test(d)||!v||typeof v!=="object"||Array.isArray(v)) continue;
+      const note=typeof v.note==="string"?v.note:"", prompt=typeof v.prompt==="string"?v.prompt:"";
+      if(!note&&!prompt) continue;
+      dclean[d]={ note, prompt, source:(v.source==="ai"?"ai":"local"), ts:(typeof v.ts==="number"?v.ts:0) }; }
+    st.drops=dclean; }
   st.profile.goals=Array.isArray(st.profile.goals)?st.profile.goals.filter(x=>typeof x==="string"):[];
   st.profile.supplements=Array.isArray(st.profile.supplements)?st.profile.supplements.filter(x=>typeof x==="string"):[];
   if(typeof st.profile.aiKey!=="string") st.profile.aiKey="";
@@ -117,6 +128,11 @@ function normalizeState(p){
     if(e.moods && !Array.isArray(e.moods)) delete e.moods;
     if(e.symptoms && !Array.isArray(e.symptoms)) delete e.symptoms;
     if(e.nutrition && !Array.isArray(e.nutrition)) delete e.nutrition;
+    if("place" in e && typeof e.place!=="string") delete e.place;
+    if(e.moments){ e.moments = Array.isArray(e.moments)
+      ? e.moments.filter(m=>m&&typeof m==="object"&&!Array.isArray(m)).map(m=>({ ts:(typeof m.ts==="number"?m.ts:0), place:(typeof m.place==="string"?m.place:""), feel:(Array.isArray(m.feel)?m.feel.filter(x=>typeof x==="string"):[]), note:(typeof m.note==="string"?m.note:"") }))
+      : undefined;
+      if(!e.moments||!e.moments.length) delete e.moments; }
     logs[d]=e;
   }
   st.logs=logs; st.v=f.v;
@@ -167,6 +183,9 @@ function mergeState(remote, local){
   // reminders: per-key, newer side wins (so a key one device hasn't seen yet isn't wiped)
   out.reminders={}; const lR=(local.reminders||{}), rR=(remote.reminders||{});
   for(const k of new Set([...Object.keys(lR), ...Object.keys(rR)])) out.reminders[k]= rNewer ? (rR[k]||lR[k]) : (lR[k]||rR[k]);
+  // drops: personalized daily-drop cache — union by date, newer ts wins (never lose a day's drop)
+  out.drops={}; const lD=(local.drops&&typeof local.drops==="object")?local.drops:{}, rD=(remote.drops&&typeof remote.drops==="object")?remote.drops:{};
+  for(const d of new Set([...Object.keys(lD), ...Object.keys(rD)])){ const l=lD[d], r=rD[d]; out.drops[d]= !l?r : (!r?l : (((r&&r.ts||0)>(l&&l.ts||0))?r:l)); }
   out.meta={ updatedAt: Math.max(remote.meta&&remote.meta.updatedAt||0, local.meta&&local.meta.updatedAt||0) };
   return normalizeState(out);
 }
@@ -475,6 +494,86 @@ const Insights = {
   top(){ const f=this.detect(); if(!f.length) return null; return f[(new Date().getDate())%f.length]; }
 };
 
+/* ============================================================
+   DAILY DROP — a personal note + journaling prompt Gata "drops"
+   each day, customized from her recent check-ins: where she's
+   been, how she's felt, her energy, and her cycle phase. Fully
+   local from her own data (no network); an optional tap enhances
+   it with the AI proxy when available. Also supplies the check-in
+   prompt so the question Gata asks adapts to her.
+   ============================================================ */
+const Drop = {
+  // dominant emotional state across the last few days of check-ins + today's moments
+  recentState(days=5){
+    const tally={low:0,activated:0,steady:0,high:0}; const today=todayISO();
+    for(let i=0;i<days;i++){ const log=S.logs[addDays(today,-i)]; if(!log) continue; const w=(i===0?2:1);
+      const st=moodsToState(logMoods(log));
+      if(st&&tally[st]!=null) tally[st]+=w;
+      else if(log.energy){ const es=log.energy<=2?"low":(log.energy===3?"steady":"high"); tally[es]+=w; }
+      (log.moments||[]).forEach(m=>{ const ms=moodsToState(m.feel||[]); if(ms&&tally[ms]!=null) tally[ms]+=w; });
+    }
+    let best=null,bestN=0; for(const k of ["activated","low","high","steady"]){ if(tally[k]>bestN){ best=k; bestN=tally[k]; } }
+    return bestN>0?best:null; // null → "neutral" (nothing to go on yet)
+  },
+  // the place she's mentioned most across recent check-ins/moments (today weighted)
+  recentPlace(days=5){
+    const tally={}; const today=todayISO();
+    for(let i=0;i<days;i++){ const log=S.logs[addDays(today,-i)]; if(!log) continue; const w=(i===0?2:1);
+      const add=(p)=>{ if(p&&typeof p==="string") tally[p]=(tally[p]||0)+w; };
+      add(log.place); (log.moments||[]).forEach(m=>add(m.place));
+    }
+    let best=null,bestN=0; for(const k in tally){ if(tally[k]>bestN){ best=k; bestN=tally[k]; } }
+    return best;
+  },
+  hasRecentCheckin(days=5){ const today=todayISO(); for(let i=0;i<days;i++){ if(loggedOn(S.logs[addDays(today,-i)])) return true; } return false; },
+  _pick(arr){ return (arr&&arr.length)?arr[new Date().getDate()%arr.length]:""; }, // rotate daily, stable within a day
+  // static, personal-from-her-own-data drop for today (note + prompt, optionally seasoned by where she's been)
+  staticDrop(){
+    const info=Cycle.info(); const idx=info?info.idx:0;
+    const stateKey=this.recentState()||"neutral";
+    const pd=((C.dailyDrops&&C.dailyDrops.byPhase)||[]).find(p=>p.phaseKey===PHASE_META[idx].key);
+    const bucket=pd&&pd.states&&(pd.states[stateKey]||pd.states.neutral);
+    let note=bucket?this._pick(bucket.notes):"";
+    let prompt=bucket?this._pick(bucket.prompts):"";
+    const place=this.recentPlace();
+    const placeNotes=(C.dailyDrops&&C.dailyDrops.placeNotes)||{};
+    const pc=(place&&placeNotes[place])?this._pick(placeNotes[place]):"";
+    if(note&&pc){ const s=pc.charAt(0).toUpperCase()+pc.slice(1); note=note+" "+s+(/[.!?]$/.test(s)?"":"."); }
+    if(!note) note=info?Forecast.outlook():"Whenever you're ready, tell me where you are and how today feels.";
+    if(!prompt) prompt=this._pick((C.tracking&&C.tracking.logPrompts)||[])||"How are you, really, right now?";
+    return { note, prompt, source:"local", state:stateKey, place:place||"" };
+  },
+  // today's drop: use the AI-enhanced one if she made it personal, else the static personal drop
+  forToday(){
+    const cached=S.drops&&S.drops[todayISO()];
+    if(cached&&cached.note) return { note:cached.note, prompt:cached.prompt||this.staticDrop().prompt, source:cached.source||"ai" };
+    return this.staticDrop();
+  },
+  promptForToday(){ return this.forToday().prompt; },
+  isPersonalized(){ const c=S.drops&&S.drops[todayISO()]; return !!(c&&c.source==="ai"&&c.note); },
+  // opt-in: ask the AI proxy to write a truly personal drop from recent feedback; caches for the day
+  async enhance(){
+    if(!AI.available()) throw new Error("Gata AI isn't set up yet.");
+    const c=AI.context();
+    const today=todayISO(); const bits=[];
+    for(let i=0;i<5;i++){ const d=addDays(today,-i); const log=S.logs[d]; if(!log) continue;
+      const moods=logMoods(log); const parts=[];
+      if(log.place) parts.push(`at ${log.place.toLowerCase()}`);
+      if(moods.length) parts.push(`feeling ${moods.join("/").toLowerCase()}`);
+      if(log.energy) parts.push(`energy ${log.energy}/5`);
+      if((log.symptoms||[]).length) parts.push(`noticing ${log.symptoms.join(", ").toLowerCase()}`);
+      (log.moments||[]).forEach(m=>{ const mp=[]; if(m.place)mp.push(`at ${m.place.toLowerCase()}`); if((m.feel||[]).length)mp.push((m.feel||[]).join("/").toLowerCase()); if(m.note)mp.push(`“${m.note}”`); if(mp.length)parts.push("a moment: "+mp.join(", ")); });
+      if(parts.length) bits.push(`${i===0?"today":i===1?"yesterday":daysBetween(d,today)+" days ago"}: ${parts.join("; ")}`);
+    }
+    const digest=bits.length?bits.join("\n"):"no recent check-ins yet";
+    const sys=`You are Gata, a warm cycle & nervous-system companion, writing ${c.name}'s personal "daily drop". Right now she is in her ${c.phase}. Her focus areas: ${c.goals}. Her recent check-ins — where she's been and how she's felt:\n${digest}\n\nWrite two things. "note": 1–2 warm sentences to her, second person, that gently reflect back what you notice in her recent check-ins and where she is in her cycle — like a caring friend texting, never clinical, never a to-do, no medical or supplement advice, no promises. "prompt": one gentle journaling question tuned to right now. Keep both short.`;
+    const schema={ type:"object", additionalProperties:false, properties:{ note:{type:"string"}, prompt:{type:"string"} }, required:["note","prompt"] };
+    const out=await AI.json("Write today's drop for me.", sys, schema);
+    if(out&&out.note){ S.drops=S.drops||{}; S.drops[todayISO()]={ note:out.note, prompt:out.prompt||"", source:"ai", ts:Date.now() }; commit(); return out; }
+    throw new Error("No drop came back — try again in a moment.");
+  }
+};
+
 /* ---- 8) Accent theming ---- */
 function setAccent(idx){
   const m=PHASE_META[idx] ?? PHASE_META[0];
@@ -577,7 +676,14 @@ function renderToday(){
   const moodChips=C.tracking.moods.map(m=>`<div class="pill ${logMoods(log).includes(m)?"sel":""}" data-mood="${esc(m)}">${esc(m)}</div>`).join("");
   const sympChips=C.tracking.symptoms.map(s=>`<div class="pill ${(log.symptoms||[]).includes(s)?"sel":""}" data-symp="${esc(s)}">${esc(s)}</div>`).join("");
   const habits=C.tracking.dailyHabits.map((h,i)=>`<div class="habit ${(log.habits||{})[i]?"done":""}" data-habit="${i}"><div class="check">✓</div><div><div class="h-txt">${esc(h.habit)}</div><div class="h-why">${esc(h.why)}</div></div></div>`).join("");
-  const promptIdx=(new Date().getDate())%C.tracking.logPrompts.length;
+  const drop=Drop.forToday();
+  const placeChips=(C.tracking.places||[]).map(p=>`<div class="pill ${log.place===p?"sel":""}" data-place="${esc(p)}">${esc(p)}</div>`).join("");
+  const moments=(log.moments||[]);
+  const momentsStrip = moments.length ? `<div class="moments-strip">`+moments.map(m=>{
+      const time=new Date(m.ts||Date.now()).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+      const bits=[m.place,(m.feel||[]).join(", "),m.note].filter(Boolean).join(" · ");
+      return `<div class="moment-row"><span class="moment-time">${esc(time)}</span><span class="moment-body">${esc(bits||"a quiet moment")}</span></div>`;
+    }).join("")+`</div>` : "";
   const {n:pn, milestone}=currentMilestone();
 
   main.innerHTML=`
@@ -641,16 +747,30 @@ function renderToday(){
 
     <div class="affirm">${esc(pickAffirmation(idx, log))}”${(logMoods(log).length||log.energy)?`<div style="font-family:var(--sans);font-style:normal;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-top:14px;opacity:.85">✦ for you, right now</div>`:""}</div>
 
+    <div class="card drop-card">
+      <div class="section-label" style="color:var(--accent);margin-bottom:8px">✦ Your daily drop${Drop.isPersonalized()?` <span class="rec-badge">personalized</span>`:""}</div>
+      <div class="drop-note">${esc(drop.note)}</div>
+      <div class="drop-prompt">💭 ${esc(drop.prompt)}</div>
+      <div class="drop-actions">
+        <button class="pill" id="dropJournal">Journal this →</button>
+        ${(AI.available()&&!Drop.isPersonalized())?`<button class="pill" id="dropPersonalize">Make it personal ✨</button>`:""}
+      </div>
+    </div>
+
     <div class="card">
       <div class="section-label">Daily check-in</div>
-      <div style="font-size:13px;font-weight:600;margin-bottom:8px">${esc(C.tracking.energyScaleLabel)}</div>
+      <div class="ci-q" style="margin-top:2px">Where are you right now?</div>
+      <div class="chips" id="placeChips">${placeChips}</div>
+      <div class="ci-q">${esc(C.tracking.energyScaleLabel)}</div>
       <div class="energy-row" id="energyRow">${energyDots}</div>
-      <div style="font-size:13px;font-weight:600;margin:16px 0 8px">How are you feeling? <span class="muted" style="font-weight:400">(tap all that fit)</span></div>
+      <div class="ci-q">How do you feel right now? <span class="muted" style="font-weight:400">(tap all that fit)</span></div>
       <div class="chips" id="moodChips">${moodChips}</div>
-      <div style="font-size:13px;font-weight:600;margin:16px 0 8px">Anything in your body? <span class="muted" style="font-weight:400">(tap any)</span></div>
+      <div class="ci-q">Anything in your body? <span class="muted" style="font-weight:400">(tap any)</span></div>
       <div class="chips" id="sympChips">${sympChips}</div>
-      <div style="font-size:13px;font-weight:600;margin:18px 0 4px">Notes</div>
-      <textarea id="noteBox" placeholder="${esc(C.tracking.logPrompts[promptIdx])}">${esc(log.note||"")}</textarea>
+      <div class="ci-q">Notes</div>
+      <textarea id="noteBox" placeholder="${esc(drop.prompt)}">${esc(log.note||"")}</textarea>
+      ${momentsStrip}
+      <button class="btn ghost" id="momentBtn" style="margin-top:12px">＋ Check in on this moment</button>
     </div>
 
     <div class="card">
@@ -669,8 +789,12 @@ function renderToday(){
   $("energyRow").onclick=e=>{const d=e.target.closest("[data-energy]"); if(!d)return; setLog("energy", (S.logs[todayISO()]||{}).energy===+d.dataset.energy?null:+d.dataset.energy); renderToday();};
   $("moodChips").onclick=e=>{const d=e.target.closest("[data-mood]"); if(!d)return; toggleMood(d.dataset.mood); renderToday();};
   $("sympChips").onclick=e=>{const d=e.target.closest("[data-symp]"); if(!d)return; toggleSymptom(d.dataset.symp); renderToday();};
+  $("placeChips").onclick=e=>{const d=e.target.closest("[data-place]"); if(!d)return; const cur=(S.logs[todayISO()]||{}).place; setLog("place", cur===d.dataset.place?null:d.dataset.place); renderToday();};
   $("habitList").onclick=e=>{const d=e.target.closest("[data-habit]"); if(!d)return; toggleHabit(+d.dataset.habit); renderToday();};
   $("noteBox").oninput=e=>setLog("note",e.target.value);
+  { const mb=$("momentBtn"); if(mb) mb.onclick=()=>Moment.open(); }
+  { const dj=$("dropJournal"); if(dj) dj.onclick=()=>{ const nb=$("noteBox"); if(nb){ nb.scrollIntoView({behavior:"smooth",block:"center"}); setTimeout(()=>nb.focus(),220); } }; }
+  { const dp=$("dropPersonalize"); if(dp) dp.onclick=async()=>{ dp.disabled=true; const old=dp.textContent; dp.textContent="Writing… ✨"; try{ await Drop.enhance(); toast("Your drop is personalized ✨"); renderToday(); }catch(err){ dp.disabled=false; dp.textContent=old; toast(err.message||"Couldn't personalize right now"); } }; }
   $("saveBtn").onclick=()=>{ toast(commit() ? "Saved ✓" : "Couldn't save on this device — storage may be full or in Private Mode"); };
   $("calmBtn").onclick=()=>Breath.open(map.recommendedBreath[0]);
   $("goPhase").onclick=()=>{ activePhaseTab=idx; switchTab("phases"); };
@@ -920,6 +1044,7 @@ function renderMore(){
     </div>`;
   };
 
+  const mo=(r&&r.moments&&Array.isArray(r.moments.times))?r.moments:{on:false,times:["11:00","15:00","19:00"]};
   main.innerHTML=`
   <div class="view">
     <h2 style="margin:2px 0 14px">More</h2>
@@ -964,6 +1089,14 @@ function renderMore(){
       ${remRow("checkin","Daily check-in","A gentle nudge to log your day")}
       ${remRow("meditation","Meditation","A moment of stillness, matched to your phase")}
       ${remRow("breath","Breath reset","A quick nervous-system reset")}
+      <div class="settings-row" style="align-items:flex-start">
+        <div style="flex:1;padding-right:10px"><div class="sl">Check in through the day</div><div class="sd">Gentle pings to notice where you are and how you feel — your answers shape your daily drops</div></div>
+        <div class="switch ${mo.on?"on":""}" data-remtog-moments></div>
+      </div>
+      ${mo.on?`<div id="momentTimes" style="margin:2px 0 6px">
+        ${mo.times.map((t,i)=>`<div class="moment-time-row"><input type="time" value="${esc(t)}" data-mtime="${i}" style="width:auto"><button class="micro-x" data-mtime-del="${i}" title="Remove this time">✕</button></div>`).join("")}
+        ${mo.times.length<6?`<button class="btn ghost" id="addMoment" style="margin-top:4px;padding:8px 14px">＋ Add a time</button>`:""}
+      </div>`:""}
       <button class="btn ghost" id="dlIcs" style="margin-top:10px">📅 Add these to my phone calendar</button>
       <div class="sd" style="margin-top:8px">In-app nudges fire while Gata is open; the calendar reminders fire even when it's closed — the most reliable on iPhone.</div>
     </div>
@@ -1016,6 +1149,10 @@ function renderMore(){
   { const gc=$("goalChips"); if(gc) gc.onclick=e=>{const d=e.target.closest("[data-goal]"); if(!d)return; const k=d.dataset.goal; S.profile.goals=S.profile.goals||[]; const i=S.profile.goals.indexOf(k); i>=0?S.profile.goals.splice(i,1):S.profile.goals.push(k); commit(); renderMore();}; }
   main.querySelectorAll("[data-remtog]").forEach(el=>el.onclick=function(){ const k=this.dataset.remtog; r[k].on=!r[k].on; if(r[k].on) Reminders.request(); commit(); this.classList.toggle("on"); Reminders.scheduleAll(); });
   main.querySelectorAll("[data-remtime]").forEach(el=>el.onchange=function(){ r[this.dataset.remtime].time=this.value; commit(); Reminders.scheduleAll(); });
+  { const mt=main.querySelector("[data-remtog-moments]"); if(mt) mt.onclick=function(){ r.moments.on=!r.moments.on; if(r.moments.on) Reminders.request(); commit(); Reminders.scheduleAll(); renderMore(); }; }
+  main.querySelectorAll("[data-mtime]").forEach(el=>el.onchange=function(){ const i=+this.dataset.mtime; if(/^\d{2}:\d{2}$/.test(this.value)){ r.moments.times[i]=this.value; commit(); Reminders.scheduleAll(); } });
+  main.querySelectorAll("[data-mtime-del]").forEach(el=>el.onclick=function(){ const i=+this.dataset.mtimeDel; if(r.moments.times.length<=1){ toast("Keep one time, or turn the pings off"); return; } r.moments.times.splice(i,1); commit(); Reminders.scheduleAll(); renderMore(); });
+  { const am=$("addMoment"); if(am) am.onclick=()=>{ r.moments.times.push("12:00"); commit(); Reminders.scheduleAll(); renderMore(); }; }
   $("dlIcs").onclick=Reminders.downloadIcs;
   $("themeSeg").onclick=e=>{const b=e.target.closest("[data-th]"); if(!b)return; S.profile.theme=b.dataset.th; commit(); applyTheme(); renderMore();};
   $("expData").onclick=exportData;
@@ -1528,15 +1665,22 @@ const Reminders = {
   request(){ if("Notification" in window && Notification.permission==="default") Notification.requestPermission(); },
   scheduleAll(){
     Object.values(this.timers).forEach(t=>clearTimeout(t)); this.timers={};
+    const fire=(body)=>{ if("Notification" in window && Notification.permission==="granted"){ try{ new Notification("Gata", {body}); }catch(e){} } this.scheduleAll(); };
+    const msUntil=(h,mi)=>{ const now=new Date(); const next=new Date(); next.setHours(h,mi,0,0); if(next<=now) next.setDate(next.getDate()+1); return next-now; };
     const cfg={ checkin:()=>"Time for your daily Gata check-in 🌸",
       meditation:()=>pick(C.practiceMap.reminders.meditationCopy),
       breath:()=>pick(C.practiceMap.reminders.breathCopy) };
     Object.keys(cfg).forEach(k=>{ const r=S.reminders[k]; if(!r||!r.on) return;
       if(!/^\d{2}:\d{2}$/.test(r.time||"")) return;
       const [h,mi]=r.time.split(":").map(Number); if(isNaN(h)||isNaN(mi)) return;
-      const now=new Date(); const next=new Date(); next.setHours(h,mi,0,0); if(next<=now) next.setDate(next.getDate()+1);
-      this.timers[k]=setTimeout(()=>{ if("Notification" in window && Notification.permission==="granted"){ new Notification("Gata", {body:cfg[k]()}); } this.scheduleAll(); }, next-now);
+      this.timers[k]=setTimeout(()=>fire(cfg[k]()), msUntil(h,mi));
     });
+    // throughout-the-day check-in pings — several gentle "where are you, how do you feel?" nudges
+    const mo=S.reminders.moments;
+    if(mo&&mo.on&&Array.isArray(mo.times)){
+      mo.times.forEach((tm,i)=>{ if(!/^\d{2}:\d{2}$/.test(tm||"")) return; const [h,mi]=tm.split(":").map(Number); if(isNaN(h)||isNaN(mi)) return;
+        this.timers["moment_"+i]=setTimeout(()=>fire(momentPing()), msUntil(h,mi)); });
+    }
   },
   downloadIcs(){
     const parts=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Gata//EN","CALSCALE:GREGORIAN"];
@@ -1547,6 +1691,13 @@ const Reminders = {
       const [h,mi]=r.time.split(":").map(Number); const start=new Date(); start.setDate(start.getDate()+1); start.setHours(h,mi,0,0);
       parts.push("BEGIN:VEVENT","UID:gata-"+k+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT10M","RRULE:FREQ=DAILY","SUMMARY:"+titles[k],"DESCRIPTION:Your daily Gata practice.","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:"+titles[k],"END:VALARM","END:VEVENT");
     });
+    const mo=S.reminders.moments;
+    if(mo&&mo.on&&Array.isArray(mo.times)){
+      mo.times.forEach((tm,i)=>{ if(!/^\d{2}:\d{2}$/.test(tm||"")) return; any=true;
+        const [h,mi]=tm.split(":").map(Number); const start=new Date(); start.setDate(start.getDate()+1); start.setHours(h,mi,0,0);
+        parts.push("BEGIN:VEVENT","UID:gata-moment"+i+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT5M","RRULE:FREQ=DAILY","SUMMARY:Gata check-in 🌸","DESCRIPTION:Where are you, and how do you feel right now?","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:Gata check-in","END:VALARM","END:VEVENT");
+      });
+    }
     if(!any){ toast("Turn a reminder on first"); return; }
     parts.push("END:VCALENDAR");
     const blob=new Blob([parts.join("\r\n")],{type:"text/calendar"}); const url=URL.createObjectURL(blob);
@@ -1555,6 +1706,7 @@ const Reminders = {
   }
 };
 function pick(arr){ return arr[(new Date().getDate()+new Date().getHours())%arr.length]; }
+function momentPing(){ const arr=(C.momentCopy&&C.momentCopy.length)?C.momentCopy:["A gentle check-in — where are you, and how does right now feel? 🌸"]; return pick(arr); }
 
 /* ============================================================
    DATA EXPORT / IMPORT
@@ -1759,6 +1911,47 @@ const Yap = {
   },
   close(){ if(this.listening){ try{ this.rec.stop(); }catch(e){} } const ov=$("yapOv"); if(ov) ov.remove(); }
 };
+
+/* ============================================================
+   MOMENT CHECK-IN — a lightweight "where are you & how do you
+   feel, right now?" capture. Used from the Today tab and from the
+   throughout-the-day pings. Stored as timestamped moments on the
+   day's log so several can be captured across the day.
+   ============================================================ */
+const Moment = {
+  open(){
+    closeAllPlayers();
+    const places=(C.tracking&&C.tracking.places)||[];
+    const feels=(C.tracking&&C.tracking.moods)||[];
+    const ov=document.createElement("div"); ov.className="overlay"; ov.id="momentOv";
+    ov.innerHTML=`<div class="sheet">
+      <div class="ask-head"><h2 style="margin:0;font-size:22px">A moment 🫧</h2><button class="icon-btn" id="momentClose">✕</button></div>
+      <div class="sd" style="margin-bottom:14px">Where are you, and how do you feel right now? No wrong answers — this just helps Gata know you.</div>
+      <div class="ci-q" style="margin-top:0">Where are you?</div>
+      <div class="chips" id="mPlaces">${places.map(p=>`<div class="pill" data-mplace="${esc(p)}">${esc(p)}</div>`).join("")}</div>
+      <div class="ci-q">How do you feel right now?</div>
+      <div class="chips" id="mFeels">${feels.map(m=>`<div class="pill" data-mfeel="${esc(m)}">${esc(m)}</div>`).join("")}</div>
+      <div class="ci-q">Anything else? <span class="muted" style="font-weight:400">(optional)</span></div>
+      <textarea id="mNote" rows="2" placeholder="A word or two, if you like…"></textarea>
+      <button class="btn" id="mSave" style="margin-top:14px">Save this moment</button>
+    </div>`;
+    document.body.appendChild(ov);
+    let place="", feel=[];
+    ov.onclick=e=>{ if(e.target===ov) this.close(); };
+    $("momentClose").onclick=()=>this.close();
+    $("mPlaces").onclick=e=>{ const d=e.target.closest("[data-mplace]"); if(!d)return; place=(place===d.dataset.mplace)?"":d.dataset.mplace; ov.querySelectorAll("[data-mplace]").forEach(x=>x.classList.toggle("sel", x.dataset.mplace===place)); };
+    $("mFeels").onclick=e=>{ const d=e.target.closest("[data-mfeel]"); if(!d)return; const fv=d.dataset.mfeel; const i=feel.indexOf(fv); i>=0?feel.splice(i,1):feel.push(fv); d.classList.toggle("sel"); };
+    $("mSave").onclick=()=>{
+      const note=($("mNote").value||"").trim();
+      if(!place && !feel.length && !note){ toast("Tell me where you are or how you feel first"); return; }
+      const t=todayISO(); S.logs[t]=S.logs[t]||{}; const arr=Array.isArray(S.logs[t].moments)?S.logs[t].moments:[];
+      arr.push({ ts:Date.now(), place, feel:[...feel], note }); S.logs[t].moments=arr; S.logs[t]._u=Date.now(); commit();
+      toast("Moment saved 🌿"); this.close(); if(currentTab==="today") renderToday();
+    };
+  },
+  close(){ const ov=$("momentOv"); if(ov) ov.remove(); }
+};
+window.Moment=Moment;
 
 /* ============================================================
    ONBOARDING

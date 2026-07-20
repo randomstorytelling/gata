@@ -1785,3 +1785,552 @@ window.GATA.eft.sequences = [
     ]
   }
 ];
+
+/* ============================================================
+   GATA — personalization layer (generated from research, curated)
+   Feeds three things, all pure data:
+     • affirmations — the living affirmation (cycle phase x how she feels)
+     • dailyDrops   — the personalized daily drop note + journaling prompt,
+                      chosen from her own recent check-ins, seasoned by where she is
+     • momentCopy   — warm copy for the throughout-the-day check-in pings
+   ============================================================ */
+window.GATA.affirmations = {
+ "byPhase": [
+  {
+   "phaseKey": "menstrual",
+   "default": "I let myself go quiet and slow. My body is asking for rest, and I can honor that.",
+   "states": [
+    {
+     "stateKey": "low",
+     "affirmations": [
+      "I have nothing to prove today, and rest is enough.",
+      "I am allowed to do less and still be whole.",
+      "My tiredness is real, and I can meet it softly instead of pushing.",
+      "I let my body be heavy, warm, and cared for."
+     ]
+    },
+    {
+     "stateKey": "activated",
+     "affirmations": [
+      "One long exhale can carry the edge off.",
+      "I don't have to fix this feeling. I can let it settle in its own time.",
+      "My body is safe to slow down, even when my mind wants to race.",
+      "I loosen my jaw, drop my shoulders, and let this moment be enough."
+     ]
+    },
+    {
+     "stateKey": "steady",
+     "affirmations": [
+      "I am at home in this stillness.",
+      "I trust the quiet I'm feeling and let it hold me.",
+      "I am gently here with myself, and that is plenty.",
+      "This calm is a place to rest, not one more thing to do."
+     ]
+    },
+    {
+     "stateKey": "high",
+     "affirmations": [
+      "I can feel bright and still choose to move gently.",
+      "I welcome this spark without having to spend all of it.",
+      "My energy can be a warm glow rather than a race.",
+      "I am lit up, and I am still allowed to rest."
+     ]
+    }
+   ]
+  },
+  {
+   "phaseKey": "follicular",
+   "default": "I'm waking up with the season — soft, curious, ready to begin again.",
+   "states": [
+    {
+     "stateKey": "low",
+     "affirmations": [
+      "I don't have to bloom on schedule — my spring rises in its own time.",
+      "One small step or none at all, I'm still moving with my season.",
+      "My energy can return slowly. I'm not behind.",
+      "I meet the tiredness gently instead of forcing the rise."
+     ]
+    },
+    {
+     "stateKey": "activated",
+     "affirmations": [
+      "I let my rising energy have somewhere gentle to land.",
+      "I can be full of momentum and still move at a pace my body trusts.",
+      "I don't have to chase every idea at once — one is enough.",
+      "I soften my shoulders and let the buzz settle."
+     ]
+    },
+    {
+     "stateKey": "steady",
+     "affirmations": [
+      "I'm grounded and rising — a calm base for whatever I begin.",
+      "I can build gently from here, one clear step at a time.",
+      "I trust the quiet confidence under my fresh energy.",
+      "I let steadiness and momentum move together."
+     ]
+    },
+    {
+     "stateKey": "high",
+     "affirmations": [
+      "I'm lit up and ready — and I get to choose where this energy goes.",
+      "I let my brightness build something instead of scattering it.",
+      "I ride this momentum with joy and a little focus.",
+      "I'm allowed to feel this capable, this alive."
+     ]
+    }
+   ]
+  },
+  {
+   "phaseKey": "ovulatory",
+   "default": "I move through today open and warm — free to connect, and just as free to rest.",
+   "states": [
+    {
+     "stateKey": "low",
+     "affirmations": [
+      "I meet myself where I actually am, not where the calendar says I should be.",
+      "My worth isn't measured by how brightly I shine.",
+      "I can be quiet in a season known for glowing, and nothing is wrong with me.",
+      "I let myself do less, no explanation owed."
+     ]
+    },
+    {
+     "stateKey": "activated",
+     "affirmations": [
+      "I can feel this much and still slow all the way down.",
+      "I let my exhale stretch long and my shoulders drop.",
+      "I don't have to say yes to everything my energy offers.",
+      "I'm safe to step back from the buzz whenever I need to."
+     ]
+    },
+    {
+     "stateKey": "steady",
+     "affirmations": [
+      "I hold my energy gently — giving where it feels good, keeping what's mine.",
+      "I'm connected to others and rooted in myself at once.",
+      "I trust this easy feeling without chasing it or bracing for its end.",
+      "I move toward the people and moments that truly light me up."
+     ]
+    },
+    {
+     "stateKey": "high",
+     "affirmations": [
+      "I take up space and shine, freely and without apology.",
+      "My energy is mine to spend however I choose.",
+      "I'm open, magnetic, and fully here.",
+      "I can be lit all the way up and still stay soft with myself."
+     ]
+    }
+   ]
+  },
+  {
+   "phaseKey": "luteal",
+   "default": "I let myself wind down as the season turns inside me — softening is its own kind of wisdom.",
+   "states": [
+    {
+     "stateKey": "low",
+     "affirmations": [
+      "I don't have to push through this tiredness; I can let my body set the pace.",
+      "I meet my tenderness with softness instead of criticism.",
+      "I've done enough today just by being here and breathing.",
+      "Resting now is me caring for myself, not falling behind."
+     ]
+    },
+    {
+     "stateKey": "activated",
+     "affirmations": [
+      "I let my breath grow long and slow, telling my body it's safe.",
+      "My irritability is a messenger, not a failing, and I can soften around it.",
+      "I loosen my jaw, my shoulders, and my grip on this moment.",
+      "I don't have to fix everything right now; I can let the edges settle."
+     ]
+    },
+    {
+     "stateKey": "steady",
+     "affirmations": [
+      "I honor this quiet steadiness and let it hold me.",
+      "I finish what feels good to finish and let the rest go.",
+      "I'm allowed to nest, to tend my small world, to feel at home in myself.",
+      "This calm is mine to enjoy, with nothing to earn."
+     ]
+    },
+    {
+     "stateKey": "high",
+     "affirmations": [
+      "I pour this energy into completing and tending, not overextending.",
+      "I can feel capable and still slow down when I need to.",
+      "I let my spark warm what's already mine.",
+      "Pacing myself now is a gift to my future self."
+     ]
+    }
+   ]
+  }
+ ]
+};
+window.GATA.dailyDrops = {
+ "byPhase": [
+  {
+   "phaseKey": "menstrual",
+   "states": {
+    "low": {
+     "notes": [
+      "Of course you're tired — inner winter is the lowest-energy stretch of the whole cycle. This isn't you failing; it's your body doing exactly what it's meant to. 🌙",
+      "You don't have to earn the rest you're craving. Be horizontal, warm, and unbothered for a while.",
+      "If today is a soft-clothes, dim-lights, bare-minimum kind of day, that's wisdom, not laziness.",
+      "A little heat, something warm to eat, one slow breath out — small comforts go a long way right now. 🤍"
+     ],
+     "prompts": [
+      "What's the kindest, smallest comfort you could offer yourself right now?",
+      "Where are you holding tension that could soften a little?",
+      "What's one thing you can take off today's list without any guilt?",
+      "If your tiredness could speak gently, what might it be asking for?"
+     ]
+    },
+    "activated": {
+     "notes": [
+      "Your body's running hot and fast in a season built for slowing — that mismatch alone is tiring. Let's find the exhale. 🌿",
+      "You don't have to talk yourself out of feeling wired. One breath out, longer than the breath in, and see if the edge eases.",
+      "When everything's revved up, warmth and weight help — a blanket over your legs, a hand on your chest, something to lean into.",
+      "Nothing has to be solved this second. You can let the racing settle on its own."
+     ],
+     "prompts": [
+      "What's tugging at your nervous system right now, and could it wait?",
+      "Where could you loosen — your jaw, your shoulders, your grip on the day?",
+      "What helps you feel safe and held when your body's on edge?",
+      "If you took ten minutes to do nothing at all, how would you spend them?"
+     ]
+    },
+    "steady": {
+     "notes": [
+      "There's a quiet steadiness in you today, and it suits this inner-winter season. Let yourself sink in.",
+      "This calm isn't something to stay busy through — it's a place to rest.",
+      "Feeling grounded during your bleed is its own quiet magic. Enjoy the slowness while it's here. ✦",
+      "You don't need to reach for more. Content and unhurried is a lovely place to land."
+     ],
+     "prompts": [
+      "What's helping you feel grounded today?",
+      "What does this quiet make room for that a busier day wouldn't?",
+      "How does it feel to rest without needing a reason?",
+      "What are you quietly grateful for in this slow stretch?"
+     ]
+    },
+    "high": {
+     "notes": [
+      "There's a real brightness in you today — enjoy it. You can shine gently, too; you're still in your resting season. 🌸",
+      "Feeling lit up in your inner winter is lovely. Let it be a warm glow you tend, not a fire to keep feeding.",
+      "You're capable and expansive right now. If tiredness rolls in later, that's not you slipping — just the season saying hello.",
+      "Ride the good energy, and pause the moment it stops feeling good. Both are allowed."
+     ],
+     "prompts": [
+      "What is this bright energy gently inviting you toward?",
+      "How could you enjoy this spark without emptying yourself out?",
+      "What would honoring both your energy and your rest look like today?",
+      "What feels genuinely good to say yes to right now?"
+     ]
+    },
+    "neutral": {
+     "notes": [
+      "However you're landing today, you're in your inner winter — the quiet, inward, resting part of your cycle. However you feel about that is welcome. 🌙",
+      "No need to name your mood. Just knowing you're in a slower season might take some pressure off.",
+      "This is a turn-inward time — low light, warmth, gentleness. Meet it however feels true today.",
+      "However today is going, you don't have to be anywhere but here. Slow is allowed."
+     ],
+     "prompts": [
+      "How are you actually feeling in your body right now, if you check in?",
+      "What would make today feel a little gentler, whatever your mood?",
+      "What is your body asking for that you haven't quite listened to yet?",
+      "If you gave this quiet season one word today, what would it be?"
+     ]
+    }
+   }
+  },
+  {
+   "phaseKey": "follicular",
+   "states": {
+    "low": {
+     "notes": [
+      "Spring doesn't arrive all at once — even under the tiredness, something in you is quietly turning toward the light. No rush. 🌱",
+      "If the fresh energy everyone talks about hasn't reached you yet, that's okay. Your body keeps its own calendar, and rest is part of rising too.",
+      "One small, kind thing is plenty today. You don't have to meet spring at a run.",
+      "Foggy and tender at the start of your spring isn't a wrong turn — it's just where the season finds you today."
+     ],
+     "prompts": [
+      "What would feel like the gentlest possible beginning right now?",
+      "Where in your body do you notice the tiredness asking to be heard?",
+      "If you let yourself rise slowly, what could you set down?",
+      "What's one tiny thing that would feel kind to you today?"
+     ]
+    },
+    "activated": {
+     "notes": [
+      "That buzzing under your skin might be spring energy with nowhere to land yet. Let's give it a channel — one long exhale, one thing at a time. 🌿",
+      "New-season energy tips into wired pretty easily. Nothing's wrong — your engine's just running hot. Soften the jaw, drop the shoulders.",
+      "So many ideas at once — that's a lot to hold. You don't have to act on any of them this second.",
+      "When the momentum feels jittery instead of good, slowing down isn't falling behind. Your nervous system is allowed to catch up."
+     ],
+     "prompts": [
+      "Of everything pulling at you, which one actually feels worth your energy today?",
+      "What helps your body feel a little safer when everything's revved up?",
+      "If you slowed down by ten percent, what might soften?",
+      "What would it feel like to let one idea be enough for now?"
+     ]
+    },
+    "steady": {
+     "notes": [
+      "There's a settled sureness in you today — calm underneath, energy coming up to meet it. Lovely soil to plant something in. ✦",
+      "Steady and springlike is a rare, good pairing. From here you can begin without forcing anything.",
+      "You feel clear today. A gentle day to take one honest step toward something you care about.",
+      "This calm is its own kind of momentum. Nothing to prove — just a solid place to build from."
+     ],
+     "prompts": [
+      "What's one small seed you'd love to plant while you feel this grounded?",
+      "What could building slowly and surely look like this week?",
+      "Where would you like to point this steady energy?",
+      "What feels genuinely worth beginning right now?"
+     ]
+    },
+    "high": {
+     "notes": [
+      "You're lit up — riding the bright, fresh edge of your spring. Enjoy it fully, and if it helps, pick one place to pour it so it doesn't scatter. 🌸",
+      "This is the radiant, capable feeling your rising energy is known for. Let yourself feel every bit of it.",
+      "So much momentum today. You get to steer it — toward what actually matters, at a pace that still feels like joy.",
+      "Bright and expansive suits you. A little focus now can turn all this shine into something you love."
+     ],
+     "prompts": [
+      "If this energy could build one thing this week, what would you choose?",
+      "What lights you up most right now — and how do you want to honor it?",
+      "Where might a little focus help this brightness go further?",
+      "What does it feel like in your body to be this alive today?"
+     ]
+    },
+    "neutral": {
+     "notes": [
+      "You're moving into your inner spring — the season of rising energy and fresh starts. However you're actually feeling today, there's room for it here. 🌱",
+      "Somewhere in this phase, momentum starts to build. No pressure to feel it yet; just noticing where you are is enough.",
+      "Spring can look like big beginnings or the smallest stirrings. Both of them count.",
+      "This is a season that leans toward beginning — but only when and how you're ready."
+     ],
+     "prompts": [
+      "How's your energy actually feeling as you step into this season?",
+      "If today had one gentle intention, what would it be?",
+      "What's stirring in you lately, even quietly?",
+      "What would you love to make a little room for right now?"
+     ]
+    }
+   }
+  },
+  {
+   "phaseKey": "ovulatory",
+   "states": {
+    "low": {
+     "notes": [
+      "Even in your brightest season, some days ask for less — and that's allowed. You don't owe anyone the glow today. 🤍",
+      "Inner summer gets a reputation for peak energy, but you're a person, not a forecast. Meet the body you actually have.",
+      "If you're running low while everything says you should be lit up, let that gap be okay. Rest was never something to earn back.",
+      "A quiet day tucked inside a bright phase doesn't mean anything's off. 🌙"
+     ],
+     "prompts": [
+      "What would today look like if you didn't have to keep pace with anyone's idea of your energy?",
+      "Where in your body is the tiredness asking to be honored?",
+      "What's one small thing that would feel gentle right now?",
+      "If you had full permission to do less, what would you set down first?"
+     ]
+    },
+    "activated": {
+     "notes": [
+      "All that summer energy can tip into buzzing fast. Let's find your exhale — long and slow — and let your shoulders drop. 🌿",
+      "Feeling lit up and feeling overstimulated can be almost the same from the inside. You can pull back without missing out.",
+      "Your system might be revved higher than you'd like. You don't have to answer every invitation your energy sends.",
+      "When everything feels like a yes, a pause is its own kind of clarity. Nothing has to be decided this second."
+     ],
+     "prompts": [
+      "What would help your body feel a notch calmer in the next few minutes?",
+      "Which yeses lately have felt more like pressure than real want?",
+      "Where could you put a little space between yourself and the noise today?",
+      "Underneath the buzz, what does your nervous system seem to be asking for?"
+     ]
+    },
+    "steady": {
+     "notes": [
+      "This is such a good place to be — open and connected, still rooted in yourself. Let it feel easy, no gripping required. ✦",
+      "Steady and summer make a lovely mix. You can offer warmth and still keep plenty for yourself.",
+      "You don't have to do anything big with this calm. Let it just be a nice place to rest a while.",
+      "Grounded in your brightest season — that's you trusting your own rhythm. 🌸"
+     ],
+     "prompts": [
+      "What's feeling easy and open for you today?",
+      "Who or what would you love to share a little of this warmth with?",
+      "What helps you stay rooted even when your energy runs high?",
+      "What does 'enough' look like right now, without reaching for more?"
+     ]
+    },
+    "high": {
+     "notes": [
+      "There it is — that lit-up, magnetic feeling. Enjoy it fully; no earning, no explaining. ✦",
+      "Your energy is high and yours to spend however you like. Follow what actually delights you.",
+      "Lovely moment to connect, make something, or say the bold thing. And you can keep some shine just for you.",
+      "Shine as bright as you want. You're free to come down and rest whenever — no crash required. 🌙"
+     ],
+     "prompts": [
+      "What's calling to you while your energy is this full?",
+      "How do you most want to spend this brightness today?",
+      "What feels bold and true that you'd love to say or do?",
+      "How will you know when it's time to gently come down?"
+     ]
+    },
+    "neutral": {
+     "notes": [
+      "You're moving into your inner summer — the season where energy and connection often come easiest. However you're arriving, you're welcome. 🌿",
+      "This is usually a bright, open stretch of your cycle. No pressure to feel any certain way — let's just notice where you are.",
+      "Inner summer tends to turn up the volume on energy and connection. Whatever's true today, we'll meet it together.",
+      "Some days here sparkle and some are quieter. Both belong."
+     ],
+     "prompts": [
+      "How is your energy actually feeling as you step into this brighter season?",
+      "What would feel good to give your attention to today?",
+      "Is there someone or something you feel drawn toward right now?",
+      "What kind of day are you quietly hoping this one gets to be?"
+     ]
+    }
+   }
+  },
+  {
+   "phaseKey": "luteal",
+   "states": {
+    "low": {
+     "notes": [
+      "Your body's in its inner autumn, and this tiredness makes sense — things are winding down and asking you to slow. Nothing's wrong with you. 🍂",
+      "You don't have to earn this rest. Curling up under a blanket right now is a perfectly good use of the day.",
+      "Foggy and flat is allowed. Let today be soft-focus; the clarity finds its way back.",
+      "If everything feels heavy, try being light on yourself. One small kindness is plenty."
+     ],
+     "prompts": [
+      "What would feel gentlest to let go of today?",
+      "What part of your body is quietly asking for more softness right now?",
+      "If you gave yourself full permission to rest, what would you do first?",
+      "What's one thing you could take off your plate without any guilt?"
+     ]
+    },
+    "activated": {
+     "notes": [
+      "Late autumn inside can rev everything up. That on-edge feeling isn't you failing — it's your nervous system asking for a longer exhale. 🌙",
+      "If you're feeling wired, let your shoulders drop and your breath go slow on the way out. Nothing has to be solved this second.",
+      "Everything might feel a little too loud right now. You're allowed to make your world smaller and quieter until it eases.",
+      "That prickly, restless feeling is real, and it's okay to have it. Softening your jaw is already a whole act of care."
+     ],
+     "prompts": [
+      "What might help your body feel a little safer right now?",
+      "What's asking for more space than you've been giving it?",
+      "If your irritability could speak kindly, what might it be protecting?",
+      "What would one slower exhale change about how this feels?"
+     ]
+    },
+    "steady": {
+     "notes": [
+      "This is that early-autumn calm — the nesting, tending, settling-in feeling. Let yourself sink in. 🤍",
+      "Steady looks good on you. Lovely season to finish gently and tidy your small corners of the world.",
+      "You feel grounded right now, and that's worth savoring rather than rushing past.",
+      "Being okay is enough. Let this quiet contentment be the whole point of today."
+     ],
+     "prompts": [
+      "What small thing would feel satisfying to finish or tend today?",
+      "Where do you feel most at home in yourself right now?",
+      "What's bringing you this steadiness, and could you give it more room?",
+      "What would nesting look like for you this evening?"
+     ]
+    },
+    "high": {
+     "notes": [
+      "There's a real spark in you today. In this inner autumn, it can feel lovely to pour it into finishing rather than starting something new. ✦",
+      "Feeling capable and lit up is wonderful, and you don't have to spend it all at once. Save a little for tomorrow-you.",
+      "This energy tends what's already yours so beautifully. Anything half-done that would feel good to complete?",
+      "Radiant and winding down can live side by side. Let your spark stay warm instead of sprinting."
+     ],
+     "prompts": [
+      "What would feel good to complete while you have this energy?",
+      "How could this spark care for something that's already yours?",
+      "What's one way to enjoy this fullness without overspending it?",
+      "If you saved a little of today's energy for later, what would that look like?"
+     ]
+    },
+    "neutral": {
+     "notes": [
+      "Your body's moving into its inner autumn, the turning-inward season. However you're arriving today, there's room for it here. 🍂",
+      "Wherever you are right now is a fine place to start. This is a time of winding down and finishing gently — no pressure to be anything.",
+      "These days can hold a lot of textures — calm and tender and prickly all at once. Whatever's here for you is welcome.",
+      "No need to perform a mood. This inner autumn just asks you to soften and turn toward yourself. 🤍"
+     ],
+     "prompts": [
+      "How are you actually arriving today, with no need to tidy the answer?",
+      "What does your body seem to be asking for as it turns inward?",
+      "If today could be a little gentler, what would you change?",
+      "What would finishing gently look like for you right now?"
+     ]
+    }
+   }
+  }
+ ],
+ "placeNotes": {
+  "Home": [
+   "a soft place to land — let it hold you",
+   "you don't have to be 'on' here",
+   "sink into whatever corner feels safest"
+  ],
+  "Work": [
+   "if the day's asking a lot, one long exhale is yours",
+   "let your shoulders soften between tasks",
+   "you're allowed to move slower than the room"
+  ],
+  "School": [
+   "so much to hold here — let your breath stay low and slow",
+   "a quiet minute between things still counts",
+   "you can take up a little space for yourself too"
+  ],
+  "Out & about": [
+   "out in the world — let your pace be your own",
+   "one grounding breath as you move through it",
+   "you can pause whenever your body asks"
+  ],
+  "Travelling": [
+   "in-between places ask a lot — go gently",
+   "let your shoulders drop, even here",
+   "you're allowed to arrive tired, wherever you're headed"
+  ],
+  "In bed": [
+   "rest is doing real work right now",
+   "nothing to earn here — just let yourself be held",
+   "one long exhale, and let the day set itself down"
+  ],
+  "Outside": [
+   "let the air meet you — nothing to do but be in it",
+   "feet on the ground, breath a little slower",
+   "the sky can hold some of it for you"
+  ],
+  "With people": [
+   "you can be here and still keep some quiet for yourself",
+   "connection can feel good and be a lot — both are okay",
+   "you're allowed to need less than the room does"
+  ],
+  "Alone": [
+   "your own company counts as company",
+   "no one to be for right now — just you, softening",
+   "let the quiet be a kindness, not a lack"
+  ],
+  "Somewhere new": [
+   "newness can put you on alert — let yourself go slow",
+   "one familiar breath travels with you anywhere",
+   "you don't have to have your bearings yet"
+  ]
+ }
+};
+window.GATA.momentCopy = [
+ "Where'd this moment find you — and how does it feel in your body?",
+ "Quick pause. Notice where you are and what's here for you right now.",
+ "However you've landed, what's your body saying this minute?",
+ "Where are you? And underneath that — how are you, really?",
+ "One breath. Notice the room you're in and the season you're in. 🌙",
+ "No wrong answer: where are you, and what do you need right now?",
+ "Wherever you are — let yourself feel how right now actually feels.",
+ "Just checking: where'd you land, and how's your energy sitting?",
+ "A soft ping — notice your surroundings, then notice yourself. 🤍",
+ "What's true for your body, right here, right now?"
+];

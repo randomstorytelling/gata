@@ -287,3 +287,20 @@ select { width:100%; padding:13px; border-radius:12px; background:var(--surface-
   .yap-mic.on { animation:none !important; }
   /* keep the breath orb legible at a calm resting size; phase/text cues still pace the practice */
 }
+
+/* --- personalization UI: daily drop, check-in questions, moment check-ins --- */
+.rec-badge { display:inline-block; font-size:10px; font-weight:700; color:var(--accent-ink); background:var(--accent-soft); padding:2px 8px; border-radius:999px; margin-left:6px; letter-spacing:.02em; text-transform:none; vertical-align:middle; }
+.drop-card { background:linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 70%, var(--surface)), var(--surface));
+  border-color:color-mix(in srgb, var(--accent) 16%, var(--border)); }
+.drop-note { font-family:var(--serif); font-size:16.5px; line-height:1.5; }
+.drop-prompt { font-size:13.5px; color:var(--text-soft); margin-top:10px; line-height:1.45; }
+.drop-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+.drop-actions .pill { cursor:pointer; }
+.ci-q { font-size:13px; font-weight:600; margin:16px 0 8px; }
+.moments-strip { margin-top:14px; border-top:1px solid var(--border); padding-top:10px; display:flex; flex-direction:column; gap:7px; }
+.moment-row { display:flex; gap:8px; font-size:12.5px; align-items:baseline; }
+.moment-time { flex:none; font-weight:700; color:var(--accent-ink); font-variant-numeric:tabular-nums; }
+.moment-body { color:var(--text-soft); }
+.moment-time-row { display:flex; align-items:center; gap:8px; margin:6px 0; }
+.micro-x { width:30px; height:30px; border-radius:8px; background:var(--surface-2); color:var(--text-soft); font-size:13px; flex:none; display:grid; place-items:center; }
+.micro-x:active { background:var(--border); }
