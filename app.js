@@ -38,6 +38,19 @@ const SYNC_AVAILABLE = !!FIREBASE_CONFIG.apiKey;
 const GATA_AI_PROXY = "https://gata-ai-proxy.vybrance.workers.dev";
 const AI_AVAILABLE = /^https?:\/\//.test(GATA_AI_PROXY);
 
+/* ---- 1c) Oura Ring ------------------------------------------------
+   Gata pulls sleep, HRV, resting heart rate, readiness and temperature
+   straight from an Oura ring with a Personal Access Token (each person
+   makes their own at cloud.ouraring.com/personal-access-tokens — the
+   token lives only in their browser). Oura's API does not allow direct
+   browser calls (no CORS), so requests go through a tiny relay that just
+   adds CORS and forwards the request — see /gata-oura-proxy for a ready-
+   to-deploy Cloudflare Worker. Set OURA_API_BASE to that Worker's URL.
+   Leaving it as the default hits Oura directly (works only where CORS
+   isn't enforced, e.g. a native wrapper). Nothing secret lives here —
+   each person's token is sent from their own device per request. */
+const OURA_API_BASE = "https://api.ouraring.com";
+
 /* ---- 2) Content + constants ---- */
 const C = window.GATA;
 const LS_KEY = "gata_v2";
@@ -53,13 +66,14 @@ const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 /* ---- 3) Helpers ---- */
 const $ = (id) => document.getElementById(id);
-function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 function todayISO(){ return iso(new Date()); }
 function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 function parseISO(s){ const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); }
 function daysBetween(a,b){ return Math.round((parseISO(b)-parseISO(a))/86400000); }
 function addDays(s,n){ const d=parseISO(s); d.setDate(d.getDate()+n); return iso(d); }
 function niceDate(ds){ return parseISO(ds).toLocaleString("en-US",{month:"short",day:"numeric"}); }
+function niceSyncTime(ts){ if(!ts) return ""; const d=new Date(ts); const ds=iso(d), t=d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}); const rel=ds===todayISO()?"today":ds===addDays(todayISO(),-1)?"yesterday":niceDate(ds); return rel+" at "+t; }
 function clampCycle(n){ return Math.max(20,Math.min(45, Math.round(+n||28))); }
 function hexA(hex,a){ const h=hex.replace("#",""); return `rgba(${parseInt(h.slice(0,2),16)},${parseInt(h.slice(2,4),16)},${parseInt(h.slice(4,6),16)},${a})`; }
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1700); }
@@ -77,7 +91,7 @@ function medByKey(k){ return C.meditations.find(m=>m.key===k) || C.meditations.f
 function freshState(){
   return {
     v:3,
-    profile:{ name:"", theme:"auto", onboarded:false, cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8" },
+    profile:{ name:"", theme:"auto", onboarded:false, cycleLength:28, periodLength:5, lastPeriodStart:"", goals:[], supplements:[], soundscape:"none", soundVol:0.6, aiKey:"", aiModel:"claude-opus-4-8", ouraToken:"", ouraAuto:false, ouraLastSync:0 },
     cycles:{ starts:[] },
     logs:{},
     practice:{ sessions:[] },
@@ -114,6 +128,9 @@ function normalizeState(p){
   st.profile.supplements=Array.isArray(st.profile.supplements)?st.profile.supplements.filter(x=>typeof x==="string"):[];
   if(typeof st.profile.aiKey!=="string") st.profile.aiKey="";
   if(typeof st.profile.aiModel!=="string"||!st.profile.aiModel) st.profile.aiModel="claude-opus-4-8";
+  if(typeof st.profile.ouraToken!=="string") st.profile.ouraToken="";
+  st.profile.ouraAuto=!!st.profile.ouraAuto;
+  if(typeof st.profile.ouraLastSync!=="number") st.profile.ouraLastSync=0;
   st.profile.cycleLength=clampCycle(st.profile.cycleLength);
   st.profile.periodLength=Math.max(2,Math.min(10,+st.profile.periodLength||5));
   st.profile.soundVol=(typeof st.profile.soundVol==="number"&&st.profile.soundVol>=0&&st.profile.soundVol<=1)?st.profile.soundVol:0.6;
@@ -511,6 +528,8 @@ const Drop = {
       if(st&&tally[st]!=null) tally[st]+=w;
       else if(log.energy){ const es=log.energy<=2?"low":(log.energy===3?"steady":"high"); tally[es]+=w; }
       (log.moments||[]).forEach(m=>{ const ms=moodsToState(m.feel||[]); if(ms&&tally[ms]!=null) tally[ms]+=w; });
+      // a lighter-recovery day from her Oura ring gently nudges the drop toward rest (never overrides how she says she feels)
+      const hh=log.health; if(hh && ((hh.readiness!=null&&hh.readiness<70)||(hh.sleepHours!=null&&hh.sleepHours<6))) tally.low+=1;
     }
     let best=null,bestN=0; for(const k of ["activated","low","high","steady"]){ if(tally[k]>bestN){ best=k; bestN=tally[k]; } }
     return bestN>0?best:null; // null → "neutral" (nothing to go on yet)
@@ -724,7 +743,7 @@ function renderToday(){
       ${rotatingGoalTip()?`<div style="font-size:13.5px"><b style="color:var(--accent)">Today, lean into:</b> ${esc(rotatingGoalTip())}</div>`:""}
     </div>`:""}
 
-    ${log.health?`<div class="card"><div class="section-label">From Apple Health ⌚</div>
+    ${log.health?`<div class="card"><div class="section-label">${esc(healthSourceLabel(log.health))}</div>
       <div class="focus-grid">${healthMetrics(log.health).map(it=>`<div class="focus-item"><div class="k">${esc(it[0])}</div><div class="v">${esc(it[1])}</div></div>`).join("")}</div>
     </div>`:""}
 
@@ -1101,6 +1120,21 @@ function renderMore(){
       <div class="sd" style="margin-top:8px">In-app nudges fire while Gata is open; the calendar reminders fire even when it's closed — the most reliable on iPhone.</div>
     </div>
 
+    <div class="card" id="ouraCard">
+      <div class="section-label">Oura Ring 💍 ${Oura.connected()?`<span class="rec-badge">connected</span>`:""}</div>
+      ${Oura.connected()?`
+        <div class="sd" style="margin-bottom:10px">Your sleep, HRV, resting heart rate, readiness and temperature flow into Gata each day — and gently shape your daily drop.${p.ouraLastSync?` <span class="muted">Last synced ${esc(niceSyncTime(p.ouraLastSync))}.</span>`:""}</div>
+        <button class="btn" id="ouraSync">💍 Sync from Oura now</button>
+        <div class="settings-row" style="margin-top:6px"><div style="flex:1;padding-right:10px"><div class="sl">Sync automatically</div><div class="sd">Quietly refresh when you open Gata</div></div><div class="switch ${p.ouraAuto?"on":""}" data-oura-auto></div></div>
+        <button class="btn ghost" id="ouraDisconnect">Disconnect Oura</button>
+      `:`
+        <div class="sd" style="margin-bottom:10px">Connect your Oura ring so your sleep, HRV, resting heart rate, readiness and body temperature flow into Gata — nothing to log by hand. Your token stays on this device.</div>
+        <div class="field"><label>Oura Personal Access Token</label><input type="password" id="ouraToken" placeholder="Paste your token" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <button class="btn" id="ouraConnect">💍 Connect Oura</button>
+        <div class="sd" style="margin-top:8px">Create a token at <b>cloud.ouraring.com → Personal Access Tokens</b>. <a class="link" id="ouraHelp">How &amp; why →</a></div>
+      `}
+    </div>
+
     <div class="card">
       <div class="section-label">Apple Health ⌚</div>
       <div class="sd" style="margin-bottom:10px">Pull in sleep, HRV, resting heart rate, activity, mindful minutes, and your period dates. Your data stays on your phone.</div>
@@ -1160,6 +1194,20 @@ function renderMore(){
   $("resetData").onclick=()=>{ if(confirm("Reset everything on this device? (Cloud data, if signed in, is unaffected.)")){ localStorage.removeItem(LS_KEY); S=loadState(); applyTheme(); render(); } };
   { const hh=$("healthHelp"); if(hh) hh.onclick=openHealthSheet;
     const hi=$("healthImport"); if(hi) hi.onclick=()=>{ const v=($("healthPaste").value||"").trim(); if(v) Health.importPaste(v); else toast("Paste your Health JSON first"); }; }
+  { const oc=$("ouraConnect"); if(oc) oc.onclick=async()=>{
+      const tok=($("ouraToken").value||"").trim();
+      if(tok.length<16){ toast("Paste your full Oura token"); return; }
+      oc.disabled=true; const old=oc.textContent; oc.textContent="Connecting…";
+      S.profile.ouraToken=tok; S.profile.ouraAuto=true;
+      try{ const n=await Oura.sync(7,{quiet:true}); toast("Oura connected ✓ · "+n+" day"+(n===1?"":"s")+" 💍"); renderMore(); }
+      catch(err){ S.profile.ouraToken=""; S.profile.ouraAuto=false; commit(); oc.disabled=false; oc.textContent=old; toast(err.message||"Couldn't connect Oura"); }
+    };
+    const os=$("ouraSync"); if(os) os.onclick=async()=>{ os.disabled=true; const old=os.textContent; os.textContent="Syncing…";
+      try{ const n=await Oura.sync(7,{quiet:true}); toast("Synced "+n+" day"+(n===1?"":"s")+" from Oura 💍"); renderMore(); }
+      catch(err){ os.disabled=false; os.textContent=old; toast(err.message||"Oura sync failed"); } };
+    const oa=main.querySelector("[data-oura-auto]"); if(oa) oa.onclick=function(){ S.profile.ouraAuto=!S.profile.ouraAuto; commit(); this.classList.toggle("on"); };
+    const od=$("ouraDisconnect"); if(od) od.onclick=()=>{ Oura.disconnect(); toast("Oura disconnected"); renderMore(); };
+    const ohelp=$("ouraHelp"); if(ohelp) ohelp.onclick=openOuraSheet; }
   $("safetyLink").onclick=openSafetySheet;
   { const rh={nourish:openNourishSheet, supp:openSupplementsSheet, labs:openLabsSheet, learn:openLearnSheet};
     main.querySelectorAll("[data-ref]").forEach(el=>el.onclick=()=>{ const fn=rh[el.dataset.ref]; if(fn) fn(); }); }
@@ -1443,17 +1491,24 @@ const EFT = {
    and sync with everything else once Google sign-in is on.
    ============================================================ */
 const SHORTCUT_NAME = "Gata Health Sync";
+const HEALTH_METRIC_KEYS = ["sleepHours","hrv","restingHR","steps","activeEnergy","mindfulMinutes","workouts","readiness","sleepScore","respiratoryRate","spo2","bodyTempDelta"];
 function healthMetrics(h){
   const a=[];
+  if(h.readiness!=null) a.push(["Readiness", String(Math.round(h.readiness))]);
+  if(h.sleepScore!=null) a.push(["Sleep score", String(Math.round(h.sleepScore))]);
   if(h.sleepHours!=null) a.push(["Sleep", (Math.round(h.sleepHours*10)/10)+" h"]);
   if(h.hrv!=null) a.push(["HRV", Math.round(h.hrv)+" ms"]);
   if(h.restingHR!=null) a.push(["Resting HR", Math.round(h.restingHR)+" bpm"]);
+  if(h.respiratoryRate!=null) a.push(["Respiratory", (Math.round(h.respiratoryRate*10)/10)+" br/min"]);
+  if(h.spo2!=null) a.push(["SpO₂", (Math.round(h.spo2*10)/10)+"%"]);
+  if(h.bodyTempDelta!=null) a.push(["Temp", (h.bodyTempDelta>0?"+":"")+(Math.round(h.bodyTempDelta*100)/100)+"°"]);
   if(h.steps!=null) a.push(["Steps", Math.round(h.steps).toLocaleString()]);
   if(h.activeEnergy!=null) a.push(["Active", Math.round(h.activeEnergy)+" kcal"]);
   if(h.mindfulMinutes!=null) a.push(["Mindful", Math.round(h.mindfulMinutes)+" min"]);
   if(h.workouts) a.push(["Workout", h.workouts]);
   return a;
 }
+function healthSourceLabel(h){ return (h&&h.source==="oura") ? "From your Oura ring 💍" : "From Apple Health ⌚"; }
 const Health = {
   importFromHash(){
     const h = location.hash || "";
@@ -1467,30 +1522,99 @@ const Health = {
     toast("Couldn't read that Health data");
     return false;
   },
-  apply(obj){
+  apply(obj, opts){
+    opts = opts || {};
     const date = (obj.date && /^\d{4}-\d{2}-\d{2}$/.test(obj.date)) ? obj.date : todayISO();
     const num = v => (v===0 || (v && !isNaN(+v))) ? +v : undefined;
     const h = { sleepHours:num(obj.sleepHours), hrv:num(obj.hrv), restingHR:num(obj.restingHR),
       steps:num(obj.steps), activeEnergy:num(obj.activeEnergy), mindfulMinutes:num(obj.mindfulMinutes),
+      readiness:num(obj.readiness), sleepScore:num(obj.sleepScore), respiratoryRate:num(obj.respiratoryRate),
+      spo2:num(obj.spo2), bodyTempDelta:num(obj.bodyTempDelta),
       workouts: obj.workouts ? String(obj.workouts).slice(0,80) : undefined, syncedAt: Date.now() };
+    if(obj.source) h.source = obj.source;
     Object.keys(h).forEach(k=> h[k]===undefined && delete h[k]);
-    if(Object.keys(h).length<=1 && !obj.periodStart){ toast("No Health values found"); return; }
+    const hasMetric = HEALTH_METRIC_KEYS.some(k=> h[k]!=null);
+    if(!hasMetric && !obj.periodStart){ if(!opts.quiet) toast("No health values found"); return false; }
     S.logs[date] = S.logs[date] || {};
     S.logs[date].health = Object.assign(S.logs[date].health||{}, h);
     S.logs[date]._u = Date.now();
-    let msg = "Synced from Apple Health ✓";
+    let msg = obj.source==="oura" ? "Synced from Oura ✓" : "Synced from Apple Health ✓";
     if(obj.periodStart && /^\d{4}-\d{2}-\d{2}$/.test(obj.periodStart) && !Cycle.starts().includes(obj.periodStart)){
-      Cycle.logStart(obj.periodStart); msg = "Apple Health synced · period start added 🩸";
+      Cycle.logStart(obj.periodStart); msg += " · period start added 🩸";
     }
-    commit();
-    if(S.profile.onboarded) render();
-    toast(msg);
+    if(!opts.deferCommit){ commit(); if(S.profile.onboarded) render(); if(!opts.quiet) toast(msg); }
+    return true;
   },
   importPaste(text){
     let obj=null; try{ obj=JSON.parse(text); }catch(e){ toast("That isn't valid Health JSON"); return; }
     this.apply(obj);
   }
 };
+
+/* ============================================================
+   OURA RING — pull sleep, HRV, resting HR, readiness & temperature
+   from an Oura ring with a Personal Access Token, folded into the
+   same log.health each day so the Today card, insights, affirmation
+   and daily drop all light up. Oura's API blocks direct browser calls
+   (no CORS), so requests go through OURA_API_BASE — a tiny relay (see
+   /gata-oura-proxy). The token lives only on this device.
+   ============================================================ */
+const Oura = {
+  connected(){ return !!(S.profile.ouraToken && String(S.profile.ouraToken).trim().length>=16); },
+  base(){ return (OURA_API_BASE||"https://api.ouraring.com").replace(/\/+$/,""); },
+  async _get(path, start, end){
+    const url = `${this.base()}/v2/usercollection/${path}?start_date=${start}&end_date=${end}`;
+    let res;
+    try { res = await fetch(url, { headers:{ Authorization:"Bearer "+String(S.profile.ouraToken).trim() } }); }
+    catch(e){ throw new Error("Couldn't reach Oura — check your connection (a relay may be needed for CORS)."); }
+    if(res.status===401 || res.status===403) throw new Error("Oura didn't accept that token — double-check it.");
+    if(!res.ok) throw new Error("Oura sync failed ("+res.status+"). Try again shortly.");
+    const j = await res.json().catch(()=>null);
+    return (j && Array.isArray(j.data)) ? j.data : [];
+  },
+  // fetch the last `days` days and fold Oura metrics into each day's log.health
+  async sync(days, opts){
+    opts = opts || {};
+    if(!this.connected()) throw new Error("Connect your Oura ring first.");
+    const end = todayISO(), span = Math.max(1, days||2);
+    // pad a day either side so last night's sleep / today's readiness aren't missed
+    const qStart = addDays(end, -(span)), qEnd = addDays(end, 1);
+    const [readiness, dailySleep, sleep, activity, spo2] = await Promise.all([
+      this._get("daily_readiness", qStart, qEnd).catch(()=>[]),
+      this._get("daily_sleep", qStart, qEnd).catch(()=>[]),
+      this._get("sleep", qStart, qEnd).catch(()=>[]),
+      this._get("daily_activity", qStart, qEnd).catch(()=>[]),
+      this._get("daily_spo2", qStart, qEnd).catch(()=>[]),
+    ]);
+    // everything empty → likely bad token / CORS: re-run one call so a real error surfaces
+    if(!readiness.length && !dailySleep.length && !sleep.length && !activity.length && !spo2.length){
+      await this._get("personal_info", qStart, qEnd);
+      throw new Error("No Oura data came back for the last few days yet.");
+    }
+    const byDay = {}, slot = d => (byDay[d] = byDay[d] || { date:d });
+    readiness.forEach(r=>{ if(!r||!r.day) return; const s=slot(r.day); if(r.score!=null) s.readiness=r.score; if(r.temperature_deviation!=null) s.bodyTempDelta=r.temperature_deviation; });
+    dailySleep.forEach(r=>{ if(!r||!r.day) return; if(r.score!=null) slot(r.day).sleepScore=r.score; });
+    activity.forEach(r=>{ if(!r||!r.day) return; const s=slot(r.day); if(r.steps!=null) s.steps=r.steps; if(r.active_calories!=null) s.activeEnergy=r.active_calories; });
+    spo2.forEach(r=>{ if(!r||!r.day) return; const sp=r.spo2_percentage; const v=(sp&&typeof sp==="object")?sp.average:sp; if(v!=null) slot(r.day).spo2=v; });
+    // sleep: a day can have several sessions — keep the longest (the main night)
+    const mainSleep = {};
+    sleep.forEach(r=>{ if(!r||!r.day) return; const cur=mainSleep[r.day]; if(!cur || (r.total_sleep_duration||0)>(cur.total_sleep_duration||0)) mainSleep[r.day]=r; });
+    Object.keys(mainSleep).forEach(day=>{ const r=mainSleep[day], s=slot(day);
+      if(r.total_sleep_duration!=null) s.sleepHours = r.total_sleep_duration/3600;
+      if(r.average_hrv!=null) s.hrv = r.average_hrv;
+      if(r.lowest_heart_rate!=null) s.restingHR = r.lowest_heart_rate;
+      if(r.average_breath!=null) s.respiratoryRate = r.average_breath;
+    });
+    let applied=0;
+    Object.keys(byDay).sort().forEach(d=>{ if(Health.apply(Object.assign({source:"oura"}, byDay[d]), {quiet:true, deferCommit:true})) applied++; });
+    S.profile.ouraLastSync = Date.now();
+    commit();
+    if(!opts.quiet && S.profile.onboarded) render();
+    return applied;
+  },
+  disconnect(){ S.profile.ouraToken=""; S.profile.ouraAuto=false; commit(); }
+};
+window.Oura = Oura;
 
 /* ============================================================
    SHEETS (safety + day detail)
@@ -1530,6 +1654,24 @@ function openHealthSheet(){
     <div class="sd" style="margin-top:10px">Need help building it? Ask Lawrence — the recipe above is all it takes.</div>
     <button class="btn" style="margin-top:16px" onclick="closeSheet()">Got it</button>`);
 }
+function openOuraSheet(){
+  openSheet(`
+    <h2>Connect your Oura ring 💍</h2>
+    <div class="disclaimer-box" style="margin:12px 0 18px">Gata reads your Oura data with a <b>Personal Access Token</b> — a private key you make for your own account. It's kept only on this device and sent straight to Oura when you sync.</div>
+    <div class="section-label">Get your token (about a minute)</div>
+    <ul class="lifelist" style="font-size:13.5px">
+      <li>In a browser, go to <b>cloud.ouraring.com</b> and sign in.</li>
+      <li>Open <b>Personal Access Tokens</b> and tap <b>Create New Personal Access Token</b>.</li>
+      <li>Copy it, come back here, paste it in, and tap <b>Connect Oura</b>.</li>
+    </ul>
+    <div class="section-label" style="margin-top:14px">What flows in</div>
+    <div class="sd">Each day Gata pulls your <b>sleep</b>, <b>HRV</b>, <b>resting heart rate</b>, <b>readiness</b>, <b>respiratory rate</b>, <b>SpO₂</b> and <b>body-temperature shift</b> — shown on Today, woven into your insights, and used to gently tune your daily drop (a lighter-recovery day leans it toward rest).</div>
+    <div class="section-label" style="margin-top:14px">Your privacy</div>
+    <div class="sd">Your token and your data stay on your device (and your own private sync, if you're signed in). Disconnect anytime and Gata forgets the token.</div>
+    <div class="sd" style="margin-top:10px;font-size:12px">For whoever set Gata up: Oura's API doesn't allow direct browser calls, so syncs route through <b>OURA_API_BASE</b> — a tiny relay (see <b>/gata-oura-proxy</b>).</div>
+    <button class="btn" style="margin-top:16px" onclick="closeSheet()">Got it</button>`);
+}
+
 /* ---- Nourish: hormone food + seed cycling, tuned to her phase & goals ---- */
 const GOAL_FOOD_MAP = { "regulate-irregular-cycle":"regulate-cycle", "ease-pms-pmdd":"ease-pms", "steadier-energy":"energy", "calmer-mood-anxiety":"mood-anxiety", "clearer-skin":"skin-acne", "perimenopause-support":"perimenopause", "fertility-ttc-support":"regulate-cycle", "better-sleep":"mood-anxiety" };
 const FOOD_GOAL_LABEL = { "ease-pms":"Ease PMS", "energy":"Steadier energy", "regulate-cycle":"Cycle regularity", "skin-acne":"Clearer skin", "perimenopause":"Perimenopause", "mood-anxiety":"Calmer mood" };
@@ -2024,6 +2166,8 @@ updateSyncUI();
 Reminders.scheduleAll();
 Health.importFromHash();   // ingest Apple Health payload if launched via the Shortcut deep link
 render();
+// quietly refresh from Oura on open, if connected + auto-sync on
+if(Oura.connected() && S.profile.ouraAuto){ Oura.sync(2,{quiet:true}).then(n=>{ if(n && S.profile.onboarded) render(); }).catch(()=>{}); }
 window.addEventListener("hashchange", ()=>Health.importFromHash()); // app already open → re-sync
 window.addEventListener("load",()=>{ if(Object.values(S.reminders).some(r=>r&&r.on)) Reminders.request(); });
 // register service worker (only meaningful over http/https)
