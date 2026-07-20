@@ -186,7 +186,17 @@ function mergeState(remote, local){
   out.logs={}; const lLogs=(local.logs&&typeof local.logs==="object")?local.logs:{}, rLogs=(remote.logs&&typeof remote.logs==="object")?remote.logs:{};
   for(const d of new Set([...Object.keys(lLogs), ...Object.keys(rLogs)])){
     const l=lLogs[d], r=rLogs[d];
-    out.logs[d] = !l ? r : (!r ? l : (((r._u||0) > (l._u||0)) ? r : l));
+    if(!l){ out.logs[d]=r; continue; }
+    if(!r){ out.logs[d]=l; continue; }
+    const win = ((r._u||0) > (l._u||0)) ? r : l;
+    // moments[] is append-only + timestamped (no delete UI) → union both sides by ts
+    // so a same-day moment captured on the other device isn't lost to last-write-wins
+    const seen=new Set(), moments=[];
+    for(const m of [...(Array.isArray(l.moments)?l.moments:[]), ...(Array.isArray(r.moments)?r.moments:[])]){
+      if(!m||typeof m!=="object") continue; const k=(m.ts||0)+"|"+(m.place||"")+"|"+(m.note||"");
+      if(!seen.has(k)){ seen.add(k); moments.push(m); }
+    }
+    out.logs[d] = moments.length ? Object.assign({}, win, { moments: moments.sort((a,b)=>(a.ts||0)-(b.ts||0)) }) : win;
   }
   // cycles + practice: additive union (never lose a logged period or practice)
   out.cycles={ starts:[...new Set([...(local.cycles&&local.cycles.starts||[]), ...(remote.cycles&&remote.cycles.starts||[])])].filter(Boolean).sort() };
@@ -550,7 +560,9 @@ const Drop = {
   staticDrop(){
     const info=Cycle.info(); const idx=info?info.idx:0;
     const stateKey=this.recentState()||"neutral";
-    const pd=((C.dailyDrops&&C.dailyDrops.byPhase)||[]).find(p=>p.phaseKey===PHASE_META[idx].key);
+    // only pull phase-specific copy when we actually know her phase — otherwise the
+    // fallback below gives a neutral, phase-agnostic line instead of asserting a phase
+    const pd=info?((C.dailyDrops&&C.dailyDrops.byPhase)||[]).find(p=>p.phaseKey===PHASE_META[idx].key):null;
     const bucket=pd&&pd.states&&(pd.states[stateKey]||pd.states.neutral);
     let note=bucket?this._pick(bucket.notes):"";
     let prompt=bucket?this._pick(bucket.prompts):"";
@@ -581,11 +593,16 @@ const Drop = {
       if(moods.length) parts.push(`feeling ${moods.join("/").toLowerCase()}`);
       if(log.energy) parts.push(`energy ${log.energy}/5`);
       if((log.symptoms||[]).length) parts.push(`noticing ${log.symptoms.join(", ").toLowerCase()}`);
+      if(log.note) parts.push(`wrote: “${String(log.note).slice(0,240)}”`);
       (log.moments||[]).forEach(m=>{ const mp=[]; if(m.place)mp.push(`at ${m.place.toLowerCase()}`); if((m.feel||[]).length)mp.push((m.feel||[]).join("/").toLowerCase()); if(m.note)mp.push(`“${m.note}”`); if(mp.length)parts.push("a moment: "+mp.join(", ")); });
       if(parts.length) bits.push(`${i===0?"today":i===1?"yesterday":daysBetween(d,today)+" days ago"}: ${parts.join("; ")}`);
     }
     const digest=bits.length?bits.join("\n"):"no recent check-ins yet";
-    const sys=`You are Gata, a warm cycle & nervous-system companion, writing ${c.name}'s personal "daily drop". Right now she is in her ${c.phase}. Her focus areas: ${c.goals}. Her recent check-ins — where she's been and how she's felt:\n${digest}\n\nWrite two things. "note": 1–2 warm sentences to her, second person, that gently reflect back what you notice in her recent check-ins and where she is in her cycle — like a caring friend texting, never clinical, never a to-do, no medical or supplement advice, no promises. "prompt": one gentle journaling question tuned to right now. Keep both short.`;
+    const info=Cycle.info();
+    const named=(S.profile.name||"").trim();
+    const whoPart = named ? `${named}'s personal "daily drop"` : `her personal "daily drop"`;
+    const phaseClause = info ? ` Right now she is in her ${c.phase}.` : ``;
+    const sys=`You are Gata, a warm cycle & nervous-system companion, writing ${whoPart}.${phaseClause} Her focus areas: ${c.goals}. Her recent check-ins — where she's been and how she's felt:\n${digest}\n\nWrite two things. "note": 1–2 warm sentences to her, second person, that gently reflect back what you notice in her recent check-ins${info?" and where she is in her cycle":""} — like a caring friend texting, never clinical, never a to-do, no medical or supplement advice, no promises. "prompt": one gentle journaling question tuned to right now. Keep both short.`;
     const schema={ type:"object", additionalProperties:false, properties:{ note:{type:"string"}, prompt:{type:"string"} }, required:["note","prompt"] };
     const out=await AI.json("Write today's drop for me.", sys, schema);
     if(out&&out.note){ S.drops=S.drops||{}; S.drops[todayISO()]={ note:out.note, prompt:out.prompt||"", source:"ai", ts:Date.now() }; commit(); return out; }
@@ -774,6 +791,7 @@ function renderToday(){
         <button class="pill" id="dropJournal">Journal this →</button>
         ${(AI.available()&&!Drop.isPersonalized())?`<button class="pill" id="dropPersonalize">Make it personal ✨</button>`:""}
       </div>
+      ${(AI.available()&&!Drop.isPersonalized())?`<div class="sd" style="font-size:11px;margin-top:8px;opacity:.85">✨ made on your device — tap to send your recent check-ins to Gata's private AI for a more personal one.</div>`:""}
     </div>
 
     <div class="card">
@@ -827,7 +845,7 @@ function setLog(k,v){ const t=todayISO(); S.logs[t]=S.logs[t]||{}; if(v===null) 
 function toggleSymptom(s){ const t=todayISO(); S.logs[t]=S.logs[t]||{}; const a=S.logs[t].symptoms||[]; const i=a.indexOf(s); i>=0?a.splice(i,1):a.push(s); S.logs[t].symptoms=a; S.logs[t]._u=Date.now(); commit(); }
 function toggleMood(m){ const t=todayISO(); S.logs[t]=S.logs[t]||{}; const a=logMoods(S.logs[t]).slice(); const i=a.indexOf(m); i>=0?a.splice(i,1):a.push(m); S.logs[t].moods=a; if("mood" in S.logs[t]) delete S.logs[t].mood; S.logs[t]._u=Date.now(); commit(); }
 function toggleHabit(i){ const t=todayISO(); S.logs[t]=S.logs[t]||{}; const h=S.logs[t].habits||{}; h[i]=!h[i]; S.logs[t].habits=h; S.logs[t]._u=Date.now(); commit(); }
-function loggedOn(l){ return !!(l&&(l.energy||l.mood||(l.moods&&l.moods.length)||(l.symptoms&&l.symptoms.length)||l.note||(l.nutrition&&l.nutrition.length)||(l.habits&&Object.values(l.habits).some(Boolean)))); }
+function loggedOn(l){ return !!(l&&(l.energy||l.mood||(l.moods&&l.moods.length)||(l.symptoms&&l.symptoms.length)||l.note||(l.nutrition&&l.nutrition.length)||(l.habits&&Object.values(l.habits).some(Boolean))||l.place||(l.moments&&l.moments.length))); }
 function streakCount(){ let n=0,d=new Date(); for(;;){ if(loggedOn(S.logs[iso(d)])){n++; d.setDate(d.getDate()-1);} else break; } return n; }
 /* gap-forgiving, no-shame: how many days she's checked in since this cycle began
    (or in the last 30 days if no cycle data). Never resets to zero for a missed day. */
@@ -1121,16 +1139,16 @@ function renderMore(){
     </div>
 
     <div class="card" id="ouraCard">
-      <div class="section-label">Oura Ring 💍 ${Oura.connected()?`<span class="rec-badge">connected</span>`:""}</div>
+      <div class="section-label">Oura Ring ${Oura.connected()?`<span class="rec-badge">connected</span>`:""}</div>
       ${Oura.connected()?`
         <div class="sd" style="margin-bottom:10px">Your sleep, HRV, resting heart rate, readiness and temperature flow into Gata each day — and gently shape your daily drop.${p.ouraLastSync?` <span class="muted">Last synced ${esc(niceSyncTime(p.ouraLastSync))}.</span>`:""}</div>
-        <button class="btn" id="ouraSync">💍 Sync from Oura now</button>
+        <button class="btn" id="ouraSync">Sync from Oura now</button>
         <div class="settings-row" style="margin-top:6px"><div style="flex:1;padding-right:10px"><div class="sl">Sync automatically</div><div class="sd">Quietly refresh when you open Gata</div></div><div class="switch ${p.ouraAuto?"on":""}" data-oura-auto></div></div>
         <button class="btn ghost" id="ouraDisconnect">Disconnect Oura</button>
       `:`
         <div class="sd" style="margin-bottom:10px">Connect your Oura ring so your sleep, HRV, resting heart rate, readiness and body temperature flow into Gata — nothing to log by hand. Your token stays on this device.</div>
         <div class="field"><label>Oura Personal Access Token</label><input type="password" id="ouraToken" placeholder="Paste your token" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
-        <button class="btn" id="ouraConnect">💍 Connect Oura</button>
+        <button class="btn" id="ouraConnect">Connect Oura</button>
         <div class="sd" style="margin-top:8px">Create a token at <b>cloud.ouraring.com → Personal Access Tokens</b>. <a class="link" id="ouraHelp">How &amp; why →</a></div>
       `}
     </div>
@@ -1199,11 +1217,11 @@ function renderMore(){
       if(tok.length<16){ toast("Paste your full Oura token"); return; }
       oc.disabled=true; const old=oc.textContent; oc.textContent="Connecting…";
       S.profile.ouraToken=tok; S.profile.ouraAuto=true;
-      try{ const n=await Oura.sync(7,{quiet:true}); toast("Oura connected ✓ · "+n+" day"+(n===1?"":"s")+" 💍"); renderMore(); }
+      try{ const n=await Oura.sync(7,{quiet:true}); toast("Oura connected ✓ · "+n+" day"+(n===1?"":"s")); renderMore(); }
       catch(err){ S.profile.ouraToken=""; S.profile.ouraAuto=false; commit(); oc.disabled=false; oc.textContent=old; toast(err.message||"Couldn't connect Oura"); }
     };
     const os=$("ouraSync"); if(os) os.onclick=async()=>{ os.disabled=true; const old=os.textContent; os.textContent="Syncing…";
-      try{ const n=await Oura.sync(7,{quiet:true}); toast("Synced "+n+" day"+(n===1?"":"s")+" from Oura 💍"); renderMore(); }
+      try{ const n=await Oura.sync(7,{quiet:true}); toast("Synced "+n+" day"+(n===1?"":"s")+" from Oura"); renderMore(); }
       catch(err){ os.disabled=false; os.textContent=old; toast(err.message||"Oura sync failed"); } };
     const oa=main.querySelector("[data-oura-auto]"); if(oa) oa.onclick=function(){ S.profile.ouraAuto=!S.profile.ouraAuto; commit(); this.classList.toggle("on"); };
     const od=$("ouraDisconnect"); if(od) od.onclick=()=>{ Oura.disconnect(); toast("Oura disconnected"); renderMore(); };
@@ -1508,7 +1526,7 @@ function healthMetrics(h){
   if(h.workouts) a.push(["Workout", h.workouts]);
   return a;
 }
-function healthSourceLabel(h){ return (h&&h.source==="oura") ? "From your Oura ring 💍" : "From Apple Health ⌚"; }
+function healthSourceLabel(h){ return (h&&h.source==="oura") ? "From your Oura ring" : "From Apple Health ⌚"; }
 const Health = {
   importFromHash(){
     const h = location.hash || "";
@@ -1656,7 +1674,7 @@ function openHealthSheet(){
 }
 function openOuraSheet(){
   openSheet(`
-    <h2>Connect your Oura ring 💍</h2>
+    <h2>Connect your Oura ring</h2>
     <div class="disclaimer-box" style="margin:12px 0 18px">Gata reads your Oura data with a <b>Personal Access Token</b> — a private key you make for your own account. It's kept only on this device and sent straight to Oura when you sync.</div>
     <div class="section-label">Get your token (about a minute)</div>
     <ul class="lifelist" style="font-size:13.5px">
@@ -1807,7 +1825,12 @@ const Reminders = {
   request(){ if("Notification" in window && Notification.permission==="default") Notification.requestPermission(); },
   scheduleAll(){
     Object.values(this.timers).forEach(t=>clearTimeout(t)); this.timers={};
-    const fire=(body)=>{ if("Notification" in window && Notification.permission==="granted"){ try{ new Notification("Gata", {body}); }catch(e){} } this.scheduleAll(); };
+    const fire=(body)=>{ let shown=false;
+      try{ if("Notification" in window && Notification.permission==="granted"){ new Notification("Gata", {body}); shown=true; } }catch(e){}
+      // foreground fallback: if a system notification can't show (no permission, or iOS Safari),
+      // still surface the nudge in-app while Gata is open
+      if(!shown && typeof document!=="undefined" && document.visibilityState!=="hidden"){ try{ toast(body); }catch(e){} }
+      this.scheduleAll(); };
     const msUntil=(h,mi)=>{ const now=new Date(); const next=new Date(); next.setHours(h,mi,0,0); if(next<=now) next.setDate(next.getDate()+1); return next-now; };
     const cfg={ checkin:()=>"Time for your daily Gata check-in 🌸",
       meditation:()=>pick(C.practiceMap.reminders.meditationCopy),
@@ -1837,7 +1860,7 @@ const Reminders = {
     if(mo&&mo.on&&Array.isArray(mo.times)){
       mo.times.forEach((tm,i)=>{ if(!/^\d{2}:\d{2}$/.test(tm||"")) return; any=true;
         const [h,mi]=tm.split(":").map(Number); const start=new Date(); start.setDate(start.getDate()+1); start.setHours(h,mi,0,0);
-        parts.push("BEGIN:VEVENT","UID:gata-moment"+i+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT5M","RRULE:FREQ=DAILY","SUMMARY:Gata check-in 🌸","DESCRIPTION:Where are you, and how do you feel right now?","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:Gata check-in","END:VALARM","END:VEVENT");
+        parts.push("BEGIN:VEVENT","UID:gata-moment"+i+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT5M","RRULE:FREQ=DAILY","SUMMARY:Gata check-in 🌸","DESCRIPTION:Where are you, and how do you feel right now?","URL:"+(location.origin+location.pathname)+"#checkin","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:Gata check-in","END:VALARM","END:VEVENT");
       });
     }
     if(!any){ toast("Turn a reminder on first"); return; }
@@ -2094,6 +2117,15 @@ const Moment = {
   close(){ const ov=$("momentOv"); if(ov) ov.remove(); }
 };
 window.Moment=Moment;
+// opened from a check-in ping (calendar event URL / deep link #checkin) → offer the moment sheet
+function maybeOpenMomentFromHash(){
+  if(/[#&](checkin|moment)\b/i.test(location.hash||"")){
+    try{ history.replaceState(null,"",location.pathname+location.search); }catch(e){}
+    if(S.profile.onboarded){ setTimeout(()=>{ try{ Moment.open(); }catch(e){} }, 300); }
+    return true;
+  }
+  return false;
+}
 
 /* ============================================================
    ONBOARDING
@@ -2166,9 +2198,10 @@ updateSyncUI();
 Reminders.scheduleAll();
 Health.importFromHash();   // ingest Apple Health payload if launched via the Shortcut deep link
 render();
+maybeOpenMomentFromHash();  // launched from a check-in ping (#checkin) → open the moment sheet
 // quietly refresh from Oura on open, if connected + auto-sync on
 if(Oura.connected() && S.profile.ouraAuto){ Oura.sync(2,{quiet:true}).then(n=>{ if(n && S.profile.onboarded) render(); }).catch(()=>{}); }
-window.addEventListener("hashchange", ()=>Health.importFromHash()); // app already open → re-sync
+window.addEventListener("hashchange", ()=>{ Health.importFromHash(); maybeOpenMomentFromHash(); }); // app already open → re-sync / check-in
 window.addEventListener("load",()=>{ if(Object.values(S.reminders).some(r=>r&&r.on)) Reminders.request(); });
 // register service worker (only meaningful over http/https)
 if("serviceWorker" in navigator && location.protocol.startsWith("http")){
