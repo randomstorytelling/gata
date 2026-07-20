@@ -762,7 +762,7 @@ function renderToday(){
 
     ${log.health?`<div class="card"><div class="section-label">${esc(healthSourceLabel(log.health))}</div>
       <div class="focus-grid">${healthMetrics(log.health).map(it=>`<div class="focus-item"><div class="k">${esc(it[0])}</div><div class="v">${esc(it[1])}</div></div>`).join("")}</div>
-    </div>`:""}
+    </div>`:(!Oura.connected()?`<button class="oura-nudge" id="ouraNudge"><span class="on-t">Connect your Oura ring</span><span class="on-s">Sleep, HRV &amp; readiness — woven into your daily drop →</span></button>`:"")}
 
     <div class="card">
       <div class="section-label">Calm, matched to your ${esc(meta.season.toLowerCase())}</div>
@@ -832,6 +832,7 @@ function renderToday(){
   { const mb=$("momentBtn"); if(mb) mb.onclick=()=>Moment.open(); }
   { const dj=$("dropJournal"); if(dj) dj.onclick=()=>{ const nb=$("noteBox"); if(nb){ nb.scrollIntoView({behavior:"smooth",block:"center"}); setTimeout(()=>nb.focus(),220); } }; }
   { const dp=$("dropPersonalize"); if(dp) dp.onclick=async()=>{ dp.disabled=true; const old=dp.textContent; dp.textContent="Writing… ✨"; try{ await Drop.enhance(); toast("Your drop is personalized ✨"); renderToday(); }catch(err){ dp.disabled=false; dp.textContent=old; toast(err.message||"Couldn't personalize right now"); } }; }
+  { const on=$("ouraNudge"); if(on) on.onclick=openOuraSheet; }
   $("saveBtn").onclick=()=>{ toast(commit() ? "Saved ✓" : "Couldn't save on this device — storage may be full or in Private Mode"); };
   $("calmBtn").onclick=()=>Breath.open(map.recommendedBreath[0]);
   $("goPhase").onclick=()=>{ activePhaseTab=idx; switchTab("phases"); };
@@ -1584,7 +1585,7 @@ const Oura = {
     const url = `${this.base()}/v2/usercollection/${path}?start_date=${start}&end_date=${end}`;
     let res;
     try { res = await fetch(url, { headers:{ Authorization:"Bearer "+String(S.profile.ouraToken).trim() } }); }
-    catch(e){ throw new Error("Couldn't reach Oura — check your connection (a relay may be needed for CORS)."); }
+    catch(e){ throw new Error("Couldn't reach Oura right now — check your connection and try again in a moment."); }
     if(res.status===401 || res.status===403) throw new Error("Oura didn't accept that token — double-check it.");
     if(!res.ok) throw new Error("Oura sync failed ("+res.status+"). Try again shortly.");
     const j = await res.json().catch(()=>null);
@@ -1905,7 +1906,9 @@ const AI = {
     const c=this.context();
     return `You are Gata — a warm, grounded companion for ${c.name}'s menstrual-cycle and nervous-system wellbeing. Right now she is in her ${c.phase}. Her focus areas: ${c.goals}. Today: ${c.recent}.
 
-Speak like a wise, caring friend who happens to know a lot about women's hormones — never clinical, never alarmist, body-neutral and affirming. Keep answers concise and practical, tuned to her current phase (foods, herbs, teas, movement, rest, breathwork, nervous-system regulation). When she's struggling, validate first, then offer one or two gentle, doable ideas. You are wellness education, not medical advice; for anything severe, persistent, or worrying, kindly encourage her to see a clinician. Never diagnose or prescribe. Avoid bullet-dumps; write like a real person texting back.`;
+Speak like a wise, caring friend who happens to know a lot about women's hormones — never clinical, never alarmist, body-neutral and affirming. Keep answers concise and practical, tuned to her current phase (foods, herbs, teas, movement, rest, breathwork, nervous-system regulation). When she's struggling, validate first, then offer one or two gentle, doable ideas. You are wellness education, not medical advice; for anything severe, persistent, or worrying, kindly encourage her to see a clinician. Never diagnose or prescribe. Avoid bullet-dumps; write like a real person texting back.
+
+Only if she asks about connecting her Oura ring, a wearable, or syncing her sleep/health data, walk her through it warmly and accurately: go to the More tab and find "Oura Ring"; create a free Personal Access Token in a browser at cloud.ouraring.com (Personal Access Tokens → Create New Personal Access Token); paste it into Gata and tap Connect. After that her sleep, HRV, resting heart rate, readiness and body-temperature shift flow in each day, show on Today, and gently shape her daily drop. Reassure her the token stays on her own device and she can disconnect anytime. (There's also an Apple Health option via a Shortcut if she prefers.) Don't bring any of this up unless she asks.`;
   },
   async _post(payload){
     if(!AI_AVAILABLE) throw new Error("Gata AI isn't set up yet.");
