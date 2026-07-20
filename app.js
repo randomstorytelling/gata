@@ -1875,6 +1875,8 @@ const Reminders = {
     const parts=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Gata//EN","CALSCALE:GREGORIAN"];
     const stamp=d=>d.getFullYear()+String(d.getMonth()+1).padStart(2,"0")+String(d.getDate()).padStart(2,"0")+"T"+String(d.getHours()).padStart(2,"0")+String(d.getMinutes()).padStart(2,"0")+"00";
     const titles={checkin:"Gata check-in 🌸", meditation:"Gata meditation 🧘‍♀️", breath:"Gata breath reset 🫧"};
+    const icsEsc=s=>String(s).replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\r?\n/g,"\\n");
+    const curiousLine=i=>{ const c=(C.momentCopy&&C.momentCopy.length)?C.momentCopy:["Where are you, and how do you feel right now?"]; return "🌸 "+c[i%c.length]; };
     let any=false;
     Object.keys(titles).forEach(k=>{ const r=S.reminders[k]; if(!r||!r.on) return; any=true;
       const [h,mi]=r.time.split(":").map(Number); const start=new Date(); start.setDate(start.getDate()+1); start.setHours(h,mi,0,0);
@@ -1884,7 +1886,8 @@ const Reminders = {
     if(mo&&mo.on&&Array.isArray(mo.times)){
       mo.times.forEach((tm,i)=>{ if(!/^\d{2}:\d{2}$/.test(tm||"")) return; any=true;
         const [h,mi]=tm.split(":").map(Number); const start=new Date(); start.setDate(start.getDate()+1); start.setHours(h,mi,0,0);
-        parts.push("BEGIN:VEVENT","UID:gata-moment"+i+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT5M","RRULE:FREQ=DAILY","SUMMARY:Gata check-in 🌸","DESCRIPTION:Where are you, and how do you feel right now?","URL:"+(location.origin+location.pathname)+"#checkin","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:Gata check-in","END:VALARM","END:VEVENT");
+        const line=icsEsc(curiousLine(i)); // a different curious hook per time so the day's nudges vary
+        parts.push("BEGIN:VEVENT","UID:gata-moment"+i+"-"+stamp(start)+"@gata","DTSTAMP:"+stamp(new Date()),"DTSTART:"+stamp(start),"DURATION:PT5M","RRULE:FREQ=DAILY","SUMMARY:"+line,"DESCRIPTION:"+icsEsc("Open Gata for a 10-second check-in — where are you, and how do you feel right now?"),"URL:"+(location.origin+location.pathname)+"#checkin","BEGIN:VALARM","TRIGGER:PT0M","ACTION:DISPLAY","DESCRIPTION:"+line,"END:VALARM","END:VEVENT");
       });
     }
     if(!any){ toast("Turn a reminder on first"); return; }
@@ -1895,7 +1898,14 @@ const Reminders = {
   }
 };
 function pick(arr){ return arr[(new Date().getDate()+new Date().getHours())%arr.length]; }
-function momentPing(){ const arr=(C.momentCopy&&C.momentCopy.length)?C.momentCopy:["A gentle check-in — where are you, and how does right now feel? 🌸"]; return pick(arr); }
+function momentPing(){
+  const generic=(C.momentCopy&&C.momentCopy.length)?C.momentCopy:["A gentle check-in — where are you, and how does right now feel? 🌸"];
+  let pool=generic;
+  try{ const info=Cycle.info(); const bp=C.momentCopyByPhase;
+    if(info && bp){ const ph=bp[PHASE_META[info.idx].key]; if(ph&&ph.length && (new Date().getMinutes()%2===0)) pool=ph; } }catch(e){}
+  const n=new Date();
+  return pool[(n.getDate()+n.getHours()+n.getMinutes())%pool.length]; // vary every ping, stay curious
+}
 
 /* ============================================================
    DATA EXPORT / IMPORT
@@ -2229,7 +2239,7 @@ function renderLogin(){
 let obStep=0; const ob={name:"",last:todayISO(),cycle:28,period:5,goals:[]};
 function renderOnboarding(){
   $("tabbar").innerHTML=""; $("calmQuick").classList.add("hidden");
-  const steps = 5; // welcome, name, cycle, goals, disclaimer (login now happens before onboarding)
+  const steps = 6; // welcome, name, cycle, goals, reminders, disclaimer (login now happens before onboarding)
   const dots=Array.from({length:steps},(_,i)=>`<i class="${i<=obStep?"on":""}"></i>`).join("");
   let body="";
   if(obStep===0){
@@ -2252,6 +2262,11 @@ function renderOnboarding(){
       <div class="chips" id="obGoals">${(C.goals||[]).map(g=>`<div class="pill ${ob.goals.includes(g.key)?"sel":""}" data-goal="${g.key}">${esc(g.label)}</div>`).join("")}</div>
       <button class="btn" id="obNext" style="margin-top:18px">Next</button>
       <button class="btn ghost" id="obSkip" style="margin-top:10px">Skip</button>`;
+  } else if(obStep===4){
+    body=`<div class="hero-emoji">🌸</div><h2 class="center" style="margin-top:8px">Want me to remind you?</h2>
+      <p class="center muted" style="margin:8px 0 18px">A few <b>curious</b> little check-in nudges through your day — each one different, so they never blur together — added to your calendar so they reach you even when Gata's closed. Gentle, never guilt, never spam.</p>
+      <button class="btn" id="obRemind">Yes, remind me 🌸</button>
+      <button class="btn ghost" id="obNext" style="margin-top:10px">Maybe later</button>`;
   } else {
     body=`<h2>One important note</h2><div class="disclaimer-box" style="margin:14px 0">${esc(C.safety.disclaimer)}</div>
       <button class="btn" id="obDone">I understand — open Gata</button>`;
@@ -2265,6 +2280,13 @@ function renderOnboarding(){
   };
   const sk=$("obSkip"); if(sk) sk.onclick=()=>{ obStep++; renderOnboarding(); };
   const og=$("obGoals"); if(og) og.onclick=e=>{const d=e.target.closest("[data-goal]"); if(!d)return; const k=d.dataset.goal, i=ob.goals.indexOf(k); i>=0?ob.goals.splice(i,1):ob.goals.push(k); renderOnboarding();};
+  const rm=$("obRemind"); if(rm) rm.onclick=()=>{
+    S.reminders.moments.on=true;
+    if(!Array.isArray(S.reminders.moments.times)||!S.reminders.moments.times.length) S.reminders.moments.times=["11:00","15:00","19:00"];
+    Reminders.request(); commit(); Reminders.scheduleAll();
+    try{ Reminders.downloadIcs(); }catch(e){}   // add the reliable calendar nudges in the same tap
+    obStep++; renderOnboarding();
+  };
   const dn=$("obDone"); if(dn) dn.onclick=()=>{
     S.profile.name=ob.name; S.profile.cycleLength=ob.cycle; S.profile.periodLength=ob.period; S.profile.goals=ob.goals; S.profile.onboarded=true;
     Cycle.logStart(ob.last);

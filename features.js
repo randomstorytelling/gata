@@ -2323,14 +2323,56 @@ window.GATA.dailyDrops = {
  }
 };
 window.GATA.momentCopy = [
- "Where'd this moment find you — and how does it feel in your body?",
- "Quick pause. Notice where you are and what's here for you right now.",
- "However you've landed, what's your body saying this minute?",
- "Where are you? And underneath that — how are you, really?",
- "One breath. Notice the room you're in and the season you're in. 🌙",
- "No wrong answer: where are you, and what do you need right now?",
- "Wherever you are — let yourself feel how right now actually feels.",
- "Just checking: where'd you land, and how's your energy sitting?",
- "A soft ping — notice your surroundings, then notice yourself. 🤍",
- "What's true for your body, right here, right now?"
+ "One word for right now?",
+ "This or that: cozy or restless?",
+ "If your energy were weather, what's the forecast?",
+ "Quick game — pick a color for this moment.",
+ "What's your body quietly asking for?",
+ "Your body's quietly up to something today — want to peek in?",
+ "Your inner season shifted a little since yesterday. Feel it?",
+ "Something's stirring in this phase — curious what you'd name it.",
+ "Plot twist: today's you might not match this morning's you.",
+ "Guess before you peek: steadier or stormier than earlier?",
+ "Ten seconds — has the tide turned since you woke up?",
+ "Morning-you had a whole mood; what's afternoon-you feeling?",
+ "A little warmth, headed your way. How does it find you?",
+ "Sending a quiet hello; where is today sitting in your body?",
+ "Thought of you and got curious — what's alive in you right now?",
+ "You've been on my mind; what would you name this feeling?",
+ "Future-you might love knowing how today felt. Leave a trace?",
+ "Leave your body a postcard from today — where are you right now?",
+ "A quick note to your future self: how's right now?",
+ "Someday you'll wonder how this stretch felt. Tell now-you."
 ];
+
+/* curious check-in pings tuned to her inner season (used by momentPing) */
+window.GATA.momentCopyByPhase = {
+ "menstrual": [
+  "Inner winter check: rest or restless?",
+  "One quiet word for your winter today?",
+  "Your winter has a quiet message — 10 seconds to hear it?",
+  "Curled-up season, and you're on my mind — what feels tender?",
+  "Winter-you shifts hour to hour; what's true this minute?"
+ ],
+ "follicular": [
+  "This or that: curious or cautious today?",
+  "Something's budding in your inner spring — noticed it yet?",
+  "Spring moves fast — bet the you of an hour ago felt different.",
+  "You crossed my mind; what feels a little newer today?",
+  "Catch the first stir of your inner spring — one word for it?"
+ ],
+ "ovulatory": [
+  "Inner summer: bright or mellow right now?",
+  "Your inner summer turned up the volume — feel the shift?",
+  "Summer highs can surprise even you — brighter than this morning?",
+  "Thinking of you, bright one; what's opening up today?",
+  "This full, sunlit moment could be a keepsake. Want to save it?"
+ ],
+ "luteal": [
+  "Inner autumn — cozy or crisp today?",
+  "Your inner autumn has a secret today — want to listen in?",
+  "Something's turning inward this week — can you feel the tug?",
+  "Thought of you; what's this softer season whispering today?",
+  "This slow, golden turn is worth remembering. How does it feel?"
+ ]
+};
