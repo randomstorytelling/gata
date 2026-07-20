@@ -677,6 +677,41 @@ function applyTheme(){
 if(window.matchMedia) matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if((S.profile.theme||"auto")==="auto") applyTheme(); });
 
 /* ============================================================
+   LIVING TAB — Gata is a website you keep open in a tab, not an app.
+   So the tab itself works for you: the title shows your phase & day,
+   the favicon takes on your season's colour, and when a check-in is
+   due while you're on another tab, your tab bar gently nudges you —
+   no install, no notification permission needed. Cleared the moment
+   you look back.
+   ============================================================ */
+function currentPhaseIdx(){ const info = S.profile.onboarded ? Cycle.info() : null; return info ? info.idx : 0; }
+function faviconSvg(bg, dot){
+  return "data:image/svg+xml,"+encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='24' fill='${bg}'/><text x='50' y='71' font-size='60' text-anchor='middle' fill='#fff' font-family='Georgia,serif'>G</text>`+
+    (dot?`<circle cx='78' cy='24' r='19' fill='#fff'/><circle cx='78' cy='24' r='13' fill='${dot}'/>`:``)+`</svg>`);
+}
+function setFavicon(mode){
+  let link=document.querySelector("link[rel='icon']"); if(!link){ link=document.createElement("link"); link.rel="icon"; document.head.appendChild(link); }
+  const accent=(PHASE_META[currentPhaseIdx()]||PHASE_META[0]).accent;
+  link.href = faviconSvg(accent, mode==="nudge" ? "#4E9A6B" : null); // green dot = "come check in"
+}
+function baseTitle(){
+  const info = S.profile.onboarded ? Cycle.info() : null;
+  return info ? `Gata · ${PHASE_META[info.idx].label}, day ${info.day}` : "Gata";
+}
+let tabNudged=false;
+function updateTab(){ if(tabNudged) return; document.title=baseTitle(); setFavicon("normal"); }
+const TabNudge = {
+  set(hook){ tabNudged=true; const h=(hook||"Check in?").replace(/\s+/g," ").trim(); document.title="🌸 "+h; setFavicon("nudge"); },
+  clear(){ if(!tabNudged) return; tabNudged=false; updateTab(); }
+};
+window.TabNudge=TabNudge;
+if(typeof document!=="undefined"){
+  document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible") TabNudge.clear(); });
+  window.addEventListener("focus", ()=>TabNudge.clear());
+}
+
+/* ============================================================
    ROUTER + RENDER
    ============================================================ */
 const main = $("main");
@@ -685,6 +720,7 @@ let calMonth=(()=>{ const d=new Date(); return {y:d.getFullYear(), m:d.getMonth(
 
 function needsLogin(){ return !Sync.user && !S.profile.guest; }
 function render(){
+  updateTab();  // keep the browser tab (title + favicon) in step with her phase
   if(SYNC_AVAILABLE && !Sync.authResolved){ renderSplash(); return; }   // waiting to learn if she's already signed in
   if(needsLogin()){ renderLogin(); return; }                            // login page: sign in, create account, or continue as guest
   if(!S.profile.onboarded){ renderOnboarding(); return; }
@@ -1880,9 +1916,9 @@ const Reminders = {
     Object.values(this.timers).forEach(t=>clearTimeout(t)); this.timers={};
     const fire=(body)=>{ let shown=false;
       try{ if("Notification" in window && Notification.permission==="granted"){ new Notification("Gata", {body}); shown=true; } }catch(e){}
-      // foreground fallback: if a system notification can't show (no permission, or iOS Safari),
-      // still surface the nudge in-app while Gata is open
-      if(!shown && typeof document!=="undefined" && document.visibilityState!=="hidden"){ try{ toast(body); }catch(e){} }
+      const hidden = (typeof document!=="undefined" && document.visibilityState==="hidden");
+      if(hidden){ try{ TabNudge.set(body); }catch(e){} }        // she's on another tab → nudge her tab bar (title + favicon), no app needed
+      else if(!shown){ try{ toast(body); }catch(e){} }          // foreground, no system notification → an in-app toast
       this.scheduleAll(); };
     const msUntil=(h,mi)=>{ const now=new Date(); const next=new Date(); next.setHours(h,mi,0,0); if(next<=now) next.setDate(next.getDate()+1); return next-now; };
     const cfg={ checkin:()=>"Time for your daily Gata check-in 🌸",
@@ -2298,7 +2334,8 @@ function renderOnboarding(){
       <button class="btn ghost" id="obSkip" style="margin-top:10px">Skip</button>`;
   } else if(obStep===4){
     body=`<div class="hero-emoji">🌸</div><h2 class="center" style="margin-top:8px">Want me to remind you?</h2>
-      <p class="center muted" style="margin:8px 0 18px">A few <b>curious</b> little check-in nudges through your day — each one different, so they never blur together — added to your calendar so they reach you even when Gata's closed. Gentle, never guilt, never spam.</p>
+      <p class="center muted" style="margin:8px 0 6px">A few <b>curious</b> little check-in nudges through your day — each one different, so they never blur together — added to your calendar so they reach you even when Gata's closed. Gentle, never guilt, never spam.</p>
+      <p class="center muted" style="font-size:12px;margin:0 0 18px">Or just keep Gata open in a tab — it'll nudge you right there. 🌸</p>
       <button class="btn" id="obRemind">Yes, remind me 🌸</button>
       <button class="btn ghost" id="obNext" style="margin-top:10px">Maybe later</button>`;
   } else {
